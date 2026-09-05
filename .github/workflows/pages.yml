@@ -18,6 +18,9 @@ concurrency:
 
 jobs:
   build:
+    # Personal self-hosting must not silently publish a second public website.
+    # Preserve upstream automation; a fork can still opt in manually.
+    if: github.repository == 'lucaboox/nuvio-web' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

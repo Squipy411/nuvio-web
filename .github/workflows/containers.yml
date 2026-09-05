@@ -11,7 +11,7 @@ permissions:
   contents: read
 concurrency:
   group: containers-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   verify:
     runs-on: ubuntu-24.04

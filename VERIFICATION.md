@@ -18,7 +18,7 @@ deployment lessons were reused, not its UI or account model.
 | Current strict frontend typecheck | Passed |
 | Current regression suite | **254 passed, 0 failed**, including the author's latest decoder lifecycle fixes and LAN-safe worker IDs |
 | Companion strict typecheck | Passed |
-| Companion policy/security and real FFmpeg integration suite | **20 passed, 0 failed, 0 skipped** with `NUVIO_MEDIA_TEST=1` |
+| Companion policy/security and real FFmpeg integration suite | **21 passed, 0 failed, 0 skipped** with `NUVIO_MEDIA_TEST=1`, including inside the production-equivalent Docker build |
 | Real Chrome player suite | **9 scenarios passed twice consecutively: 18 passed** |
 | Post-polish responsive settings/player check | Passed |
 | Production build | Passed; existing large-chunk and English-locale import warnings remain |
@@ -26,9 +26,9 @@ deployment lessons were reused, not its UI or account model.
 | Plain LAN HTTP real auth-worker check | **1 passed**; synthetic rejection round-trip, not a live account sign-in |
 | Dependency audit, frontend and companion | 0 known vulnerabilities reported at verification time |
 | Compose schema and configuration | Passed using Docker Compose **5.5.1** |
-| Docker image build/container startup/restart | Initial CI detected newer FFmpeg HLS extension checks; media hints fixed, rerun pending |
+| Docker image build/container startup/restart | **Passed** in [GitHub run 33983458104](https://github.com/Squipy411/nuvio-web/actions/runs/33983458104); initial FFmpeg 7 HLS extension issue fixed |
 | Personal fork | Verified `Squipy411/nuvio-web`; connected as origin with push permission |
-| GHCR publishing/anonymous pull | Pending release workflow and package availability verification |
+| GHCR publishing/anonymous pull | Pending release workflow; owner explicitly chose private images, anonymous access must remain denied |
 | Live account sync and physical Apple/Android/Edge devices | **Not tested in this task** |
 
 Compose's downloaded executable was checked against its official release SHA256:
@@ -82,9 +82,9 @@ provider paths and secrets opaque; TS, fMP4 and extensionless HLS are tested.
 
 ## Performance and visual evidence
 
-- Initial JavaScript: **913.97 KB → 536.47 KB** minified (about **41% smaller**).
-  Gzip: **268.29 KB → 168.61 KB** (about **37% smaller**).
-- PWA initial precache: approximately **2803 KiB → 753.30 KiB** (about **73% smaller**).
+- Initial JavaScript: **913.97 KB → 536.90 KB** minified (about **41% smaller**).
+  Gzip: **268.29 KB → 168.73 KB** (about **37% smaller**).
+- PWA initial precache: approximately **2803 KiB → 753.82 KiB** (about **73% smaller**).
   HLS.js and MediaBunny/AC3 engines load and cache on demand. Total optional
   decoder code was not removed; startup no longer fetches/parses it all eagerly.
 - The actual production build registers a service worker, reloads its sign-in
@@ -102,8 +102,8 @@ provider paths and secrets opaque; TS, fMP4 and extensionless HLS are tested.
 1. Publish through the prepared workflow in `Squipy411/nuvio-web` and verify both
    images. The upstream repo has no explicit
    redistribution license; obtain permission before making distribution public.
-2. Run the workflow's Docker build and production-stack smoke checks on a Docker
-   host, then perform an actual ZimaOS import, dashboard launch and restart test.
+2. Docker build and production-stack smoke checks now pass on GitHub's Docker
+   host. Still perform an actual ZimaOS import, dashboard launch and restart test.
    The root `docker-compose.zima.yml` now uses the actual fork's image names, but
    is not install-ready until those images exist and are pullable. The workflow
    also generates a commit-pinned installer as one complete artifact.
