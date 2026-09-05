@@ -237,6 +237,8 @@ export class MediabunnyPlayer {
   private audioCodecs: (string | null)[] = [];
   private audioChannels: number[] = [];
   private audioIndex = 0;
+  /** Frames that reached the canvas, as opposed to packets that were read. */
+  private drawn = 0;
   /** Audio exists but nothing here can decode it, so playback will be silent. */
   private silentAudio = false;
   private videoSink: CanvasSink | null = null;
@@ -742,6 +744,26 @@ export class MediabunnyPlayer {
     if (!context) return;
     context.clearRect(0, 0, this.canvas.width, this.canvas.height);
     context.drawImage(frame.canvas, 0, 0, this.canvas.width, this.canvas.height);
+    this.drawn += 1;
+  }
+
+  /**
+   * Whether anything has actually reached the screen.
+   *
+   * This engine runs its own clock, so a file whose packets parse but whose
+   * frames never decode plays perfectly as far as the interface is concerned:
+   * the duration is right, the time advances, the scrubber moves, and the
+   * picture is black and silent. That is not a state anything reported,
+   * because nothing failed — the decoder simply never answered. It is the
+   * hardest kind of broken to describe, so the player asks instead.
+   */
+  hasRendered(): boolean {
+    return this.drawn > 0;
+  }
+
+  /** What was found out about this browser's decoders, for a failure to quote. */
+  decoderSummary(): string {
+    return this.decoders;
   }
 
   /**

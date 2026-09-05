@@ -130,3 +130,27 @@ test("an automatic native attempt falls back rather than ending playback", () =>
     "and the retry must not take the same path again",
   );
 });
+
+test("a clock with nothing behind it says so", () => {
+  // The engine keeps its own time, so a file that parses but never decodes
+  // looks like it is playing: right duration, advancing position, moving
+  // scrubber, black picture, no sound. Nothing fails, so nothing was reported
+  // — and that is the exact state this player was in on iOS while appearing
+  // to work. It has to be able to notice.
+  const engine = readFileSync(
+    new URL("../src/lib/mediabunnyPlayer.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(engine, /hasRendered\(\): boolean/, "the engine must know if it drew");
+  assert.match(engine, /this\.drawn \+= 1/, "and count frames that reached the canvas");
+  const player = readFileSync(
+    new URL("../src/components/Player.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(player, /engine\.hasRendered\(\)/, "the player must ask");
+  assert.match(
+    player,
+    /engine\.decoderSummary\(\)/,
+    "and quote what the browser said about its decoders, since that is the evidence",
+  );
+});

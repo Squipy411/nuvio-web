@@ -1244,6 +1244,25 @@ export function Player({
           // elsewhere; the centre button is then the gesture.
           void engine.play().then(() => {
             if (!disposed) setPlaying(!engine.paused);
+            /*
+             * A clock with nothing behind it.
+             *
+             * This engine keeps its own time, so a file whose packets parse
+             * but whose frames never decode looks like it is playing: right
+             * duration, advancing position, moving scrubber, black picture,
+             * no sound. Nothing fails, so nothing is reported, and the
+             * interface says everything is fine. Six seconds in, ask whether
+             * a single frame ever reached the canvas, and say so if not —
+             * with what this browser admitted about its decoders, which is
+             * the only evidence anyone can send back from a phone.
+             */
+            window.setTimeout(() => {
+              if (disposed || engine.hasRendered()) return;
+              const decoders = engine.decoderSummary();
+              setNotice(
+                `Six seconds in and no frame has been drawn: this browser is reading the file but decoding nothing from it.${decoders ? ` ${decoders}` : ""}`,
+              );
+            }, 6000);
           }).catch((reason: unknown) => {
             if (disposed) return;
             engine.stop();
