@@ -17,6 +17,7 @@ import {
 import {
   assessPlayback,
   audioIsSilent,
+  isAppleWebKit,
   shouldUseRemuxFallback,
 } from "../lib/playback";
 import { MediabunnyPlayer } from "../lib/mediabunnyPlayer";
@@ -1115,9 +1116,21 @@ export function Player({
      * Matroska is the only container that needs the remux; anything the video
      * element already opens falls through to the ordinary native branch below.
      */
+    /*
+     * Also chosen automatically where the canvas player cannot have audio at
+     * all.
+     *
+     * That engine decodes audio through WebCodecs, and on iOS `AudioDecoder`
+     * does not exist — so every codec probes false and the file plays silent,
+     * however playable it is. There is nothing to fix inside that path; the
+     * only fix is not to take it. Safari decodes this audio through a video
+     * element, which is what the remux feeds.
+     */
+    const noWebCodecsAudio = typeof AudioDecoder === "undefined";
     const wantsNative =
       mode === "native" ||
-      new URLSearchParams(window.location.search).get("nativeMkv") === "1";
+      new URLSearchParams(window.location.search).get("nativeMkv") === "1" ||
+      (isAppleWebKit() && noWebCodecsAudio);
     if (wantsNative && /\.mkv(?:$|[?#\s])/i.test(`${url} ${sourceText}`)) {
       const remux = new NativeMkvPlayer(element, url, reason => {
         if (disposed) return;

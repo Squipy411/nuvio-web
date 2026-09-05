@@ -44,9 +44,26 @@ export class NativeMkvPlayer {
       requestInit: headers ? { headers } : undefined,
       fetchFn: async (resource, init) => {
         const response = await fetch(resource, init);
-        if (new Headers(init?.headers).has('range') && response.status === 200) {
+        /*
+         * A 200 to a ranged request is only wrong when the range started
+         * somewhere other than the beginning.
+         *
+         * Plenty of hosts answer an open-ended `bytes=0-` with 200 and the
+         * whole body, which is legal and is exactly the bytes that were asked
+         * for — reading forward from zero works either way. Treating that as a
+         * refusal rejected sources that seek perfectly well, and this is the
+         * first request made, so the whole file was turned away on the
+         * strength of it. A later offset answered with 200 is a real problem:
+         * the body then starts at zero while the reader expects it to start at
+         * the offset, so the stream is silently misaligned rather than short.
+         */
+        const range = new Headers(init?.headers).get('range');
+        const startsAtZero = !range || /^bytes=0-/i.test(range.trim());
+        if (range && response.status === 200 && !startsAtZero) {
           await response.body?.cancel();
-          throw new Error('This host ignored byte ranges; native MKV seeking requires range support.');
+          throw new Error(
+            `This host ignored a byte range (asked for ${range}, got the whole file). Native MKV seeking needs range support.`,
+          );
         }
         return response;
       },

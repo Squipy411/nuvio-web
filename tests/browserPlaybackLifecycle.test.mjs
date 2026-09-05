@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { MediabunnyPlayer } from '../src/lib/mediabunnyPlayer.ts';
+import { readFileSync } from 'node:fs';
 
 const deferred = () => {
   let resolve;
@@ -72,4 +73,40 @@ test('missing decoded frame is an error, not a ready black screen', async () => 
   const p = player();
   p.videoSink = { getCanvas: async () => null };
   await assert.rejects(p.seek(0), /No video frame/);
+});
+
+test("iOS takes the native path, because the canvas one cannot have audio", () => {
+  // The canvas engine decodes audio through WebCodecs, and iOS has no
+  // AudioDecoder at all — every codec probes false and the file plays silent
+  // however playable it is. Choosing that engine there is choosing silence.
+  const player = readFileSync(
+    new URL("../src/components/Player.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    player,
+    /typeof AudioDecoder === "undefined"/,
+    "the absence of WebCodecs audio has to be what decides it",
+  );
+  assert.match(
+    player,
+    /isAppleWebKit\(\) && noWebCodecsAudio/,
+    "and it must route to the native player rather than warn about it",
+  );
+});
+
+test("an open-ended range answered with 200 is not a refusal", () => {
+  // bytes=0- answered with the whole body is legal, common, and exactly the
+  // bytes asked for. Rejecting it turned away hosts that seek perfectly well
+  // — on the first request, so the whole file went with it.
+  const source = readFileSync(
+    new URL("../src/lib/nativeMkvPlayer.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /\/\^bytes=0-\/i/, "a range starting at zero is fine");
+  assert.match(
+    source,
+    /response\.status === 200 && !startsAtZero/,
+    "only a later offset answered with the whole file is a real problem",
+  );
 });
