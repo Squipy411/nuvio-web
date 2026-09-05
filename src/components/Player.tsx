@@ -245,6 +245,17 @@ export function Player({
   const [error, setError] = useState("");
   /** Non-fatal: it is playing, but something about it is worth saying. */
   const [notice, setNotice] = useState("");
+  /**
+   * Set when an automatic native attempt could not read the file.
+   *
+   * Only for the automatic case. Choosing the native player explicitly and
+   * having it fail is worth an error — that is the answer to what was asked.
+   * Being sent there by this player and finding the host will not serve it is
+   * not: before this routing existed, iOS played these files through the
+   * canvas with no sound, and a silent picture beats a dead screen.
+   */
+  const [nativeRefused, setNativeRefused] = useState(false);
+
   const [playing, setPlaying] = useState(false);
   const playingRef = useRef(false);
   playingRef.current = playing;
@@ -364,6 +375,12 @@ export function Player({
   // the native state reports its first frame, exactly once per opened stream.
   const nativePictureModeReadyRef = useRef(false);
   const url = stream.url;
+  // A different stream is a different host: it deserves the attempt this one
+  // used up, and none of the last one's explanation.
+  useEffect(() => {
+    setNativeRefused(false);
+    setNotice("");
+  }, [url]);
   const externalUrl = stream.externalUrl || url;
   const navigableExternalUrl = useMemo(
     () => safeHttpUrl(externalUrl),
@@ -1127,24 +1144,39 @@ export function Player({
      * element, which is what the remux feeds.
      */
     const noWebCodecsAudio = typeof AudioDecoder === "undefined";
-    const wantsNative =
+    const chosenNative =
       mode === "native" ||
-      new URLSearchParams(window.location.search).get("nativeMkv") === "1" ||
-      (isAppleWebKit() && noWebCodecsAudio);
+      new URLSearchParams(window.location.search).get("nativeMkv") === "1";
+    const wantsNative =
+      !nativeRefused && (chosenNative || (isAppleWebKit() && noWebCodecsAudio));
     if (wantsNative && /\.mkv(?:$|[?#\s])/i.test(`${url} ${sourceText}`)) {
-      const remux = new NativeMkvPlayer(element, url, reason => {
+      const failed = (reason: unknown) => {
         if (disposed) return;
         setWaiting(false);
         setStatus("");
-        setError(reason instanceof Error ? reason.message : "Native remux failed.");
-      }, stream.behaviorHints?.proxyHeaders?.request, settings.preferredAudioLanguage);
+        const said = reason instanceof Error ? reason.message : "Native remux failed.";
+        if (chosenNative) {
+          setError(said);
+          return;
+        }
+        // Nobody asked for this path; it was taken because the canvas one has
+        // no audio here. If it cannot read the file, go back rather than end
+        // playback — silent video is what this device managed before, and it
+        // is better than a stopped screen.
+        setNotice(`${said} Playing without sound instead.`);
+        setNativeRefused(true);
+      };
+      const remux = new NativeMkvPlayer(
+        element,
+        url,
+        failed,
+        stream.behaviorHints?.proxyHeaders?.request,
+        settings.preferredAudioLanguage,
+      );
       setStatus("Preparing native MKV playback…");
-      void remux.start(startPositionMs / 1000).catch(reason => {
-        if (disposed) return;
+      void remux.start(startPositionMs / 1000).catch((reason) => {
         remux.stop();
-        setWaiting(false);
-        setStatus("");
-        setError(reason instanceof Error ? reason.message : "Native remux failed.");
+        failed(reason);
       });
       return () => { cleanup(); remux.stop(); };
     }
@@ -1317,7 +1349,7 @@ export function Player({
     return cleanup;
     // Volume is initialized once per source; UI changes update the element directly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url, showControls, meta.language,
+  }, [url, showControls, meta.language, nativeRefused,
     // Background profile sync produces a fresh settings object. Unrelated
     // theme/layout changes must not tear down an in-flight browser decoder.
     settings.preferredAudioLanguage, settings.secondaryPreferredAudioLanguage,

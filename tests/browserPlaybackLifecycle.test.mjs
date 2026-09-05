@@ -110,3 +110,23 @@ test("an open-ended range answered with 200 is not a refusal", () => {
     "only a later offset answered with the whole file is a real problem",
   );
 });
+
+test("an automatic native attempt falls back rather than ending playback", () => {
+  // iOS is routed to the native path because the canvas one cannot have audio
+  // there. If the host will not serve that path, the device is no worse off
+  // than it was: the canvas plays the video silently, which is what it did
+  // before the routing existed. A dead screen would be worse than no sound.
+  // An explicitly chosen native player still fails visibly — that is the
+  // answer to what was asked.
+  const player = readFileSync(
+    new URL("../src/components/Player.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(player, /if \(chosenNative\) \{\s*setError\(said\);/, "a chosen path fails loudly");
+  assert.match(player, /setNativeRefused\(true\)/, "an automatic one steps aside");
+  assert.match(
+    player,
+    /!nativeRefused && \(chosenNative \|\|/,
+    "and the retry must not take the same path again",
+  );
+});
