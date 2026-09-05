@@ -3,6 +3,9 @@ import { ALL_FORMATS, Input, UrlSource, Output, Mp4OutputFormat, AppendOnlyStrea
   type InputVideoTrack, type InputAudioTrack, type VideoCodec, type AudioCodec } from 'mediabunny';
 import { readRetryDelay } from './requestPolicy.ts';
 
+/** No request may hang: an unanswered read left the player loading forever. */
+const REQUEST_TIMEOUT_MS = 20_000;
+
 type SourceConstructor = typeof MediaSource;
 export function nativeMediaSource(): SourceConstructor | undefined {
   if (typeof window === 'undefined') return undefined;
