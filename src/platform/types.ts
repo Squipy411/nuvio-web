@@ -57,6 +57,8 @@ export type StorageApi = {
  * the UI could attach it would satisfy the types and defeat the purpose.
  */
 export type AuthApi = {
+  /** Exchanges the held Nuvio token for a same-origin companion cookie, never exposing the token. */
+  companionSession?(): Promise<{ csrf: string; expires: number }>;
   signIn(
     backend: BackendConfig,
     email: string,

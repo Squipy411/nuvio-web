@@ -19,7 +19,10 @@ import {
   audioIsSilent,
   shouldUseRemuxFallback,
 } from "../lib/playback";
-import { MediabunnyPlayer } from "../lib/mediabunnyPlayer";
+import type { MediabunnyPlayer } from "../lib/mediabunnyPlayer";
+import type { CompanionPlayer } from "../lib/companionPlayer.ts";
+import { loadSubtitleSources } from "../lib/addons.ts";
+import { copyText } from "../lib/copyText.ts";
 import {
   browserColor,
   type WebPlayerSettings,
@@ -35,6 +38,7 @@ import {
   LoaderCircle,
   Captions,
   Maximize,
+  PictureInPicture2,
   Music2,
   SkipForward,
   Volume2,
@@ -67,7 +71,7 @@ import {
   skipLabel,
   type SkipSegment,
 } from "../lib/skipSegments";
-import type { ExternalPlayerMode, Meta, Stream, Video } from "../types";
+import type { ExternalPlayerMode, InstalledAddon, Meta, Stream, Video } from "../types";
 
 // Present only in the desktop shell. Keeping this capability check here makes
 // the player chrome shared while the bytes still take the right route: a web
@@ -166,7 +170,9 @@ export function Player({
   onPlayEpisode,
   blurUnwatchedEpisodes = false,
   animeSkipClientId = "",
+  addons = [],
 }: {
+  addons?: InstalledAddon[];
   stream: Stream;
   meta: Meta;
   video?: Video;
@@ -216,6 +222,10 @@ export function Player({
    * neither playing nor asked anything.
    */
   const engineRef = useRef<MediabunnyPlayer | null>(null);
+  const companionRef = useRef<CompanionPlayer | null>(null);
+  const lastCompanionProgressRef = useRef<{ position: number; duration: number; ended: boolean } | null>(null);
+  const [playbackMode, setPlaybackMode] = useState("");
+  const [legacySource, setLegacySource] = useState<string | null>(null);
   const [errorCopied, setErrorCopied] = useState(false);
   const hideTimer = useRef<number | undefined>(undefined);
   const [status, setStatus] = useState("");
@@ -500,13 +510,14 @@ export function Player({
     const element = videoRef.current;
     if (!element) return;
     if (element.paused) {
+      companionRef.current?.setPlaybackIntent(true);
       try {
         await element.play();
         setError("");
       } catch {
         setStatus("Playback needs another tap or this codec is not supported.");
       }
-    } else element.pause();
+    } else { companionRef.current?.setPlaybackIntent(false); element.pause(); }
   }, [showControls]);
   const seekTo = useCallback(
     async (requested: number) => {
@@ -534,6 +545,13 @@ export function Player({
         return;
       }
       const engine = engineRef.current;
+      if (companionRef.current) {
+        seekPreviewRef.current = null;
+        setSeekPreview(null);
+        showControls();
+        await companionRef.current.seek(requested);
+        return;
+      }
       const element = videoRef.current;
       const total = engine ? engine.duration : element?.duration ?? 0;
       const maximum = Number.isFinite(total)
@@ -571,7 +589,7 @@ export function Player({
     (amount: number) => {
       const from = nativePlayer
         ? currentTime
-        : engineRef.current?.currentTime ?? videoRef.current?.currentTime;
+        : companionRef.current?.currentTime ?? engineRef.current?.currentTime ?? videoRef.current?.currentTime;
       if (from === undefined) return;
       void seekTo(from + amount);
     },
@@ -872,6 +890,51 @@ export function Player({
       setError("This source does not provide a direct browser video URL.");
       return;
     }
+    if (platform.auth.companionSession && legacySource !== url) {
+      let disposed = false;
+      const subtitleController = new AbortController();
+      setSwitching(false); setNextDismissed(false); setDecoding(false); setError("");
+      element.volume = clamp(Number.isFinite(volume) ? volume : 1, 0, 1);
+      element.muted = muted;
+      const volumeChanged = () => { setVolume(element.volume); setMuted(element.muted); };
+      element.addEventListener("volumechange", volumeChanged);
+      void import("../lib/companionPlayer.ts").then(({ CompanionPlayer }) => {
+        if (disposed) return;
+        const player = new CompanionPlayer(element, stream, startPositionMs / 1000,
+          settings.preferredAudioLanguage === "device" ? navigator.language : settings.preferredAudioLanguage,
+          {
+            unavailable: () => { if (!disposed) setLegacySource(url); },
+            state: (value) => {
+              if (disposed) return;
+              if (value.waiting !== undefined) setWaiting(value.waiting);
+              if (value.playing !== undefined) setPlaying(value.playing);
+              if (value.error !== undefined) setError(value.error);
+              if (value.mode !== undefined) setPlaybackMode(value.mode);
+            },
+            time: (position, total) => { if (!disposed) { setCurrentTime(position); setDuration(total); } },
+            audio: (tracks, selected) => { if (!disposed) { setAudioTracks(tracks); setSelectedAudio(selected); } },
+            subtitles: (tracks, selected) => { if (!disposed) { setSubtitleTracks(tracks); setSelectedSubtitle(selected); } },
+          });
+        companionRef.current = player;
+        lastCompanionProgressRef.current = null;
+        void player.start().catch(() => { if (!disposed) { setWaiting(false); setError("The player could not start this source."); } });
+        void loadSubtitleSources(meta.type, video?.id || meta.id, addons, subtitleController.signal).then((sources) => {
+          if (!disposed) player.setSubtitleSources(sources, settings.preferredSubtitleLanguage);
+        }).catch(() => undefined);
+      });
+      return () => {
+        disposed = true;
+        subtitleController.abort();
+        const player = companionRef.current;
+        if (player) {
+          const saved = { position: player.currentTime * 1000, duration: player.duration * 1000, ended: element.ended };
+          lastCompanionProgressRef.current = saved;
+          reportRef.current(saved.position, saved.duration, saved.ended);
+        }
+        player?.stop(); companionRef.current = null;
+        element.removeEventListener("volumechange", volumeChanged);
+      };
+    }
     let disposed = false;
     setSwitching(false);
     setNextDismissed(false);
@@ -1088,6 +1151,9 @@ export function Player({
       if (!canvas) return cleanup;
       setRemuxActive(true);
       setDecoding(true);
+      let ownedEngine: MediabunnyPlayer | null = null;
+      void import("../lib/mediabunnyPlayer").then(({ MediabunnyPlayer }) => {
+      if (disposed) return;
       const engine = new MediabunnyPlayer(
         url,
         canvas,
@@ -1131,6 +1197,7 @@ export function Player({
           },
         },
       );
+      ownedEngine = engine;
       engineRef.current = engine;
       engine.setVolume(volume);
       engine.setMuted(muted);
@@ -1163,10 +1230,11 @@ export function Player({
               : "This source could not be read.",
           );
         });
+      }).catch(() => { if (!disposed) { setWaiting(false); setError("The browser compatibility player could not load. Try another source or an external player."); } });
       return () => {
         cleanup();
-        if (engineRef.current === engine) engineRef.current = null;
-        engine.stop();
+        if (engineRef.current === ownedEngine) engineRef.current = null;
+        ownedEngine?.stop();
       };
     }
     if (!verdict.playable) {
@@ -1251,7 +1319,7 @@ export function Player({
     return cleanup;
     // Volume is initialized once per source; UI changes update the element directly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url, showControls, meta.language,
+  }, [url, showControls, meta.language, legacySource,
     // Background profile sync produces a fresh settings object. Unrelated
     // theme/layout changes must not tear down an in-flight browser decoder.
     settings.preferredAudioLanguage, settings.secondaryPreferredAudioLanguage,
@@ -1273,14 +1341,22 @@ export function Player({
       if (event.key === " " || event.key.toLowerCase() === "k") {
         event.preventDefault();
         togglePlayback();
-      } else if (event.key === "ArrowLeft") seekBy(-10);
-      else if (event.key === "ArrowRight") seekBy(10);
+      } else if (event.key === "ArrowLeft") { event.preventDefault(); seekBy(-10); }
+      else if (event.key === "ArrowRight") { event.preventDefault(); seekBy(10); }
+      else if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        event.preventDefault();
+        const next = clamp(volume + (event.key === "ArrowUp" ? 0.05 : -0.05), 0, 1);
+        setPlayerVolume(next);
+      }
       else if (event.key.toLowerCase() === "m") toggleMuted();
       else if (event.key.toLowerCase() === "f") toggleFullscreen();
+      else if (event.key === "Escape") {
+        setSubsOpen(false); setAudioOpen(false); setEpisodesOpen(false); setExternalPlayerOpen(false); setInfoOpen(false); showControls();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [seekBy, toggleFullscreen, togglePlayback, toggleMuted]);
+  }, [seekBy, toggleFullscreen, togglePlayback, toggleMuted, volume, showControls]);
 
   useEffect(() => {
     if (nativePlayer) return;
@@ -1291,13 +1367,14 @@ export function Player({
     // nothing was ever saved for the streams that need it most.
     const report = (ended: boolean) => {
       const engine = engineRef.current;
-      const position = (engine ? engine.currentTime : element.currentTime) * 1000;
-      const total = engine
+      const saved = !companionRef.current && !engine ? lastCompanionProgressRef.current : null;
+      const position = saved?.position ?? (companionRef.current?.currentTime ?? (engine ? engine.currentTime : element.currentTime)) * 1000;
+      const total = saved?.duration ?? (companionRef.current ? companionRef.current.duration * 1000 : engine
         ? engine.duration * 1000
         : Number.isFinite(element.duration)
           ? element.duration * 1000
-          : 0;
-      if (position > 0 || ended) reportRef.current(position, total, ended);
+          : 0);
+      if (position > 0 || ended) reportRef.current(position, total, saved?.ended ?? ended);
     };
     // Every 15s while playing, plus the moments a position actually matters.
     const timer = window.setInterval(() => {
@@ -1366,8 +1443,13 @@ export function Player({
   ]);
 
   const selectSubtitle = (id: number) => {
-    setSelectedSubtitle(id);
     setSubsOpen(false);
+    if (companionRef.current) {
+      void companionRef.current.selectSubtitle(id).catch((reason: unknown) =>
+        setWarning(reason instanceof Error ? reason.message : "Could not load subtitles."));
+      return;
+    }
+    setSelectedSubtitle(id);
     void nativePlayer?.setSubtitleTrack(id).catch((reason: unknown) =>
       setError(
         reason instanceof Error ? reason.message : "Could not select subtitles.",
@@ -1376,6 +1458,12 @@ export function Player({
   };
 
   const selectAudio = (id: number) => {
+    if (companionRef.current) {
+      setAudioOpen(false);
+      void companionRef.current.selectAudio(id).catch((reason: unknown) =>
+        setError(reason instanceof Error ? reason.message : "Could not change audio."));
+      return;
+    }
     if (nativePlayer) {
       setSelectedAudio(id);
       setAudioOpen(false);
@@ -1416,7 +1504,7 @@ export function Player({
     onExternalPlay(
       mode,
       externalUrl,
-      Math.max(0, (nativePlayer ? currentTime : element?.currentTime ?? 0) * 1000),
+      Math.max(0, (nativePlayer ? currentTime : companionRef.current?.currentTime ?? element?.currentTime ?? 0) * 1000),
     );
   };
   const setPlayerVolume = (next: number) => {
@@ -1643,6 +1731,7 @@ export function Player({
               : ""}
           </small>
           <strong>{video?.title || meta.name}</strong>
+          {playbackMode && <small>{t(`companion.mode.${playbackMode}`)}</small>}
         </div>
         {endsAt && (
           <span className="player-ends-at" title="Estimated finish time">
@@ -1772,7 +1861,7 @@ export function Player({
                 } as CSSProperties
               }
             />
-            {nativePlayer && (
+            {(nativePlayer || platform.auth.companionSession) && (
               <div className="audio-picker">
                 <button
                   aria-label={t("player.subtitles")}
@@ -1921,6 +2010,12 @@ export function Player({
             <button aria-label={t("player.fullscreen")} onClick={toggleFullscreen}>
               <Maximize />
             </button>
+            {!nativePlayer && !decoding && document.pictureInPictureEnabled && (
+              <button aria-label={t("companion.pictureInPicture")} title={t("companion.pictureInPicture")}
+                onClick={() => void (document.pictureInPictureElement ? document.exitPictureInPicture() : videoRef.current?.requestPictureInPicture())?.catch(() => setWarning(t("companion.pictureInPictureUnavailable")))}>
+                <PictureInPicture2 />
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -2052,15 +2147,13 @@ export function Player({
             tabIndex={0}
             title="Tap to copy this message"
             onClick={() => {
-              void navigator.clipboard.writeText(error);
-              setErrorCopied(true);
+              void copyText(error).then(setErrorCopied);
               window.setTimeout(() => setErrorCopied(false), 1600);
             }}
             onKeyDown={(event) => {
               if (event.key !== "Enter" && event.key !== " ") return;
               event.preventDefault();
-              void navigator.clipboard.writeText(error);
-              setErrorCopied(true);
+              void copyText(error).then(setErrorCopied);
               window.setTimeout(() => setErrorCopied(false), 1600);
             }}
           >
@@ -2096,7 +2189,7 @@ export function Player({
                   </a>
                 )}
                 <button
-                  onClick={() => navigator.clipboard.writeText(externalUrl)}
+                  onClick={() => void copyText(externalUrl)}
                 >
                   <Copy /> Copy URL
                 </button>

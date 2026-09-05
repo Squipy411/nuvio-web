@@ -977,6 +977,10 @@ export async function loadStreams(
           fileIdx: stream.fileIdx == null ? undefined : Number(stream.fileIdx),
           addonName: addon.manifest!.name,
           addonLogo: addon.manifest!.logo,
+          subtitles: Array.isArray(stream.subtitles) ? stream.subtitles.flatMap((raw) => {
+            const item = raw as Record<string, unknown>;
+            return typeof item.url === "string" ? [{ id: String(item.id ?? item.url), url: item.url, lang: String(item.lang ?? "und"), label: typeof item.label === "string" ? item.label : undefined }] : [];
+          }) : undefined,
           behaviorHints:
             typeof stream.behaviorHints === "object"
               ? (stream.behaviorHints as Stream["behaviorHints"])
@@ -1001,6 +1005,14 @@ export async function loadStreams(
     }),
   );
   return groups.flat();
+}
+
+export async function loadSubtitleSources(type: string, id: string, addons: InstalledAddon[], signal?: AbortSignal): Promise<NonNullable<Stream["subtitles"]>> {
+  const results = await Promise.allSettled(addons.filter((addon) => addon.enabled && addon.manifest && supports(addon.manifest, "subtitles", type)).map(async (addon) => {
+    const payload = await fetchJson<{ subtitles?: Array<Record<string, unknown>> }>(resourceUrl(addon.url, "subtitles", type, id), 8000, signal);
+    return (payload.subtitles ?? []).flatMap((item) => typeof item.url === "string" ? [{ id: String(item.id ?? item.url), url: item.url, lang: String(item.lang ?? "und"), label: `${String(item.lang ?? "Subtitle")} · ${addon.manifest!.name}` }] : []);
+  }));
+  return results.flatMap((result) => result.status === "fulfilled" ? result.value : []).slice(0, 100);
 }
 
 export type DiscoverCatalog = {

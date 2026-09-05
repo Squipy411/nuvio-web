@@ -193,6 +193,7 @@ export type CatalogSection = {
   items: Meta[];
 };
 export type Stream = {
+  subtitles?: Array<{ id: string; url: string; lang: string; label?: string }>;
   name: string;
   title: string;
   description: string;

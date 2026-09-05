@@ -11,6 +11,7 @@ const workerId = globalThis.crypto.randomUUID();
 const authChannel = new BroadcastChannel(AUTH_CHANNEL_NAME);
 
 type WorkerCommand =
+  | { id: number; type: "companionSession" }
   | {
       id: number;
       type: "signIn";
@@ -64,6 +65,7 @@ let refreshToken = "";
 let generation = 0;
 let requestController = new AbortController();
 let refreshFlight: Promise<string> | null = null;
+let companionCsrf = "";
 
 function clearMemorySession() {
   requestController.abort();
@@ -269,6 +271,20 @@ async function authorizedRequest(
 }
 
 async function handle(command: WorkerCommand): Promise<unknown> {
+  if (command.type === "companionSession") {
+    if (!backend || !accessToken) throw new Error("Sign into Nuvio to connect the companion.");
+    const exchange = () => fetch(new URL("../api/companion/auth", self.location.origin + "/").toString(), {
+      method: "POST", credentials: "same-origin",
+      headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ backend: backend!.url }), signal: AbortSignal.timeout(12_000),
+    });
+    let response = await exchange();
+    if (response.status === 401) { await refresh(); response = await exchange(); }
+    if (!response.ok) throw new Error(response.status === 403 ? "The companion is configured for a different backend or account." : "The companion is unavailable or your Nuvio session expired.");
+    const result = await response.json() as { csrf: string; expires: number };
+    companionCsrf = result.csrf;
+    return result;
+  }
   if (command.type === "restore") {
     clearMemorySession();
     return withAuthLock(async () => {
@@ -355,6 +371,10 @@ async function handle(command: WorkerCommand): Promise<unknown> {
     });
   }
   if (command.type === "signOut") {
+    if (companionCsrf) {
+      await fetch("/api/companion/logout", { method: "POST", credentials: "same-origin", headers: { "x-nuvio-csrf": companionCsrf }, signal: AbortSignal.timeout(3000) }).catch(() => undefined);
+      companionCsrf = "";
+    }
     const oldBackend = backend;
     const oldAccess = accessToken;
     await withAuthLock(async () => {

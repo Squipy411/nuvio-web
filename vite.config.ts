@@ -3,9 +3,11 @@ import { createRequire } from "node:module";
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
+import defaults from "./deployment/defaults.json";
 
 /** Short commit, or "unknown" where git is not available (a CI tarball). */
-function commit() {
+function commit(buildCommit?: string) {
+  if (buildCommit) return buildCommit.slice(0, 12);
   try {
     return execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim();
   } catch {
@@ -56,14 +58,14 @@ export default defineConfig(({ mode }) => {
       // quickest way to confirm an update actually applied. The commit is in
       // there too, so a report from a phone names the code it came from.
       __APP_BUILD__: JSON.stringify(
-        `${new Date().toISOString().slice(0, 16).replace("T", " ")} · ${commit()}`,
+        `${new Date().toISOString().slice(0, 16).replace("T", " ")} · ${commit(env.APP_COMMIT)}`,
       ),
       // Reported to the account's device list, so a device can be told from
       // the build it is running.
       __APP_VERSION__: JSON.stringify(version),
-      "import.meta.env.VITE_NUVIO_SUPABASE_URL": JSON.stringify(env.VITE_NUVIO_SUPABASE_URL || env.NUVIO_SUPABASE_URL || ""),
+      "import.meta.env.VITE_NUVIO_SUPABASE_URL": JSON.stringify(env.VITE_NUVIO_SUPABASE_URL || env.NUVIO_SUPABASE_URL || defaults.backendUrl),
       "import.meta.env.VITE_NUVIO_SUPABASE_FALLBACK_URL": JSON.stringify(env.VITE_NUVIO_SUPABASE_FALLBACK_URL || env.NUVIO_SUPABASE_FALLBACK_URL || ""),
-      "import.meta.env.VITE_NUVIO_SUPABASE_ANON_KEY": JSON.stringify(env.VITE_NUVIO_SUPABASE_ANON_KEY || env.NUVIO_SUPABASE_ANON_KEY || ""),
+      "import.meta.env.VITE_NUVIO_SUPABASE_ANON_KEY": JSON.stringify(env.VITE_NUVIO_SUPABASE_ANON_KEY || env.NUVIO_SUPABASE_ANON_KEY || defaults.publishableKey),
       // The episode-ratings service, for a client that can call it directly.
       // Unset — which is every ordinary web build — the Worker is used instead,
       // because a browser cannot reach the service at all.
@@ -106,8 +108,17 @@ export default defineConfig(({ mode }) => {
           ]
         },
         workbox: {
+          // The offline shell does not need megabytes of optional media decoders.
+          globIgnores: ["**/mediabunnyPlayer-*.js", "**/mediabunny-ac3-*.js", "**/hls-*.js"],
+          navigateFallbackDenylist: [/^\/api\//, /^\/healthz$/],
+          cleanupOutdatedCaches: true,
           navigateFallback: `${base}index.html`,
           runtimeCaching: [
+            {
+              urlPattern: /\/assets\/(?:mediabunnyPlayer|mediabunny-ac3|hls)-[^/]+\.js$/,
+              handler: "CacheFirst",
+              options: { cacheName: "nuvio-player-engines", expiration: { maxEntries: 12, maxAgeSeconds: 2592000 } },
+            },
             {
               urlPattern: ({ request }) => request.destination === "image",
               handler: "CacheFirst",
@@ -121,7 +132,7 @@ export default defineConfig(({ mode }) => {
     // hosts it does not know with "Blocked request". Whose tunnel that is
     // belongs to whoever is testing, so it is named in .env.local rather than
     // here: DEV_ALLOWED_HOSTS=host.one,host.two
-    server: { port: 4174, host: "0.0.0.0", allowedHosts: devHosts },
+    server: { port: 4174, host: "0.0.0.0", allowedHosts: devHosts, proxy: { "/api/companion": { target: env.COMPANION_DEV_URL || "http://127.0.0.1:3101" } } },
     // The tunnel targets preview, not dev: vite-plugin-pwa only emits a
     // service worker on build, so a PWA install needs the built output.
     // strictPort keeps it from drifting onto another port and silently

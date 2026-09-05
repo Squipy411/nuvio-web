@@ -9092,3 +9092,14 @@ body.is-locked {
     transition: none;
   }
 }
+/* Safe, copyable playback details keep the existing settings layout. */
+.companion-diagnostics {
+  max-height: 24rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  padding: 1rem;
+  background: #080a0d;
+}

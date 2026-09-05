@@ -2,6 +2,22 @@
 
 Mobile-first browser proof of concept for Nuvio accounts and Stremio addons.
 
+## Personal self-hosted fork
+
+This checkout builds on **[lucaboox/nuvio-web](https://github.com/lucaboox/nuvio-web)**,
+not the earlier unrelated Next.js site. The original account, addon, profile,
+library, progress, source-selection and PWA architecture remains in place.
+It adds a same-origin FFmpeg companion for relay, remux, audio conversion and
+last-resort video conversion. It is not an official Nuvio Media release.
+
+See [SELF_HOSTING.md](SELF_HOSTING.md) for the two-container deployment,
+[VERIFICATION.md](VERIFICATION.md) for measured results and outstanding checks,
+and [UPSTREAM_NOTICE.md](UPSTREAM_NOTICE.md) before distributing builds.
+
+**Installer status:** images are not published yet. The publishing workflow
+generates `docker-compose.zima.yml` from the actual personal fork; the source
+template is not an install-ready substitute.
+
 ## Run
 
 ```powershell
@@ -9,7 +25,8 @@ npm install
 npm run dev
 ```
 
-The official backend is read from `NUVIO_SUPABASE_URL` and
+This fork supplies the upstream public client's backend configuration by default.
+It can be overridden with `NUVIO_SUPABASE_URL` and
 `NUVIO_SUPABASE_ANON_KEY` in `.env.local`. You can also select **Self-hosted**
 on the sign-in screen and enter a URL and publishable key on the device.
 
@@ -42,4 +59,3 @@ Library, watched and progress writes mirror the desktop client's sync payloads
 field for field. The home layout and collections are read-only here: this
 client never pushes them, so it cannot overwrite what another device saved.
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full design and limitations.
-

@@ -1,0 +1,71 @@
+# Personal Nuvio Web fork. Requires published images; see SELF_HOSTING.md.
+name: nuvio-web
+services:
+  web:
+    image: ghcr.io/squipy411/nuvio-web-web:latest
+    restart: unless-stopped
+    ports:
+      - "3075:8080"
+    depends_on:
+      companion:
+        condition: service_healthy
+    networks: [nuvio]
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1:8080/healthz]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+  companion:
+    image: ghcr.io/squipy411/nuvio-web-companion:latest
+    restart: unless-stopped
+    init: true
+    networks: [nuvio]
+    environment:
+      PORT: "3101"
+      MAX_TRANSCODES: "2"
+      MAX_PLAYBACK_SESSIONS: "8"
+      TRANSCODE_TEMP_LIMIT: "1073741824"
+      TRANSCODE_IDLE_TIMEOUT: "90"
+      # For access through a public domain, restrict this to your Nuvio user ID(s).
+      COMPANION_ALLOWED_USERS: ""
+    read_only: true
+    tmpfs:
+      - /tmp:size=1200m,mode=1777
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 128
+    mem_limit: 3g
+    stop_grace_period: 15s
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3101/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+networks:
+  # Dedicated bridge, no published companion port. Outbound internet is necessary for media/auth.
+  nuvio:
+    driver: bridge
+x-casaos:
+  id: io.github.nuvio-web.personal
+  main: web
+  index: /
+  port_map: "3075"
+  scheme: http
+  icon: https://lucaboox.github.io/nuvio-web/app-icon-1024.png
+  title:
+    en_US: Nuvio Web
+  tagline:
+    en_US: Personal self-hosted fork with local playback compatibility
+  description:
+    en_US: Nuvio Web by lucaboox with an optional local FFmpeg companion. Personal fork; not an official Nuvio Media release. Sign in with your Nuvio account.
+  category: Entertainment
+  author: Personal fork maintainer
+  developer: lucaboox and contributors
+  architectures: [amd64]
