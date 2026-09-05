@@ -12,6 +12,7 @@ const query = new URLSearchParams(location.search);
 const file = query.get("file") || "direct.mp4";
 saveCompanionPreferences({ mode: query.get("compatibility") ? "compatibility" : "automatic", resolution: "original" });
 platform.auth.companionSession = async () => {
+  if (query.has("noCompanion")) throw new Error("The companion is unavailable.");
   const response = await fetch("/api/companion/auth", { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer test-nuvio-access" }, body: JSON.stringify({ backend: "https://api.nuvio.tv" }) });
   if (!response.ok) throw new Error("The companion is unavailable.");
   return response.json();

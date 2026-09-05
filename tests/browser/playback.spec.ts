@@ -58,6 +58,16 @@ test("broken media reaches a useful error and retains external handoff", async (
   await expect(page.getByText(/source could not be inspected/i)).toBeVisible();
   await expect(page.getByRole("button", { name: "Copy stream URL", exact: true })).toBeVisible();
 });
+test("progress advances when an unavailable companion hands playback to the original player", async ({ page }) => {
+  await page.goto("/tests/browser/player.html?file=direct.mp4&compatibility=1&noCompanion=1");
+  await moving(page);
+  await page.keyboard.press("Space");
+  await expect.poll(() => page.evaluate(() => JSON.parse(document.documentElement.dataset.progress || "{}").position)).toBeGreaterThan(500);
+  await page.keyboard.press("Space");
+  await expect.poll(() => page.locator("video").evaluate((v: HTMLVideoElement) => v.currentTime)).toBeGreaterThan(1.5);
+  await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+  await expect.poll(() => page.evaluate(() => JSON.parse(document.documentElement.dataset.progress || "{}").position)).toBeGreaterThan(1500);
+});
 test("mobile player controls and desktop diagnostics stay within the viewport", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/tests/browser/player.html?file=direct.mp4"); await moving(page);

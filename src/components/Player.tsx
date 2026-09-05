@@ -935,6 +935,9 @@ export function Player({
         element.removeEventListener("volumechange", volumeChanged);
       };
     }
+    // A companion teardown snapshot is only for reporting that teardown. Once
+    // legacy playback takes over, reports must follow the live element/decoder.
+    lastCompanionProgressRef.current = null;
     let disposed = false;
     setSwitching(false);
     setNextDismissed(false);

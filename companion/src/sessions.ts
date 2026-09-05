@@ -10,13 +10,14 @@ import { opaqueId } from "./auth.ts";
 import { config } from "./config.ts";
 import { ffmpegArguments, startFfmpeg, stopProcess } from "./ffmpeg.ts";
 import { readerSuffix, rewritePlaylist } from "./playlist.ts";
+import { HlsResources } from "./hlsResources.ts";
 import { probeMedia } from "./probe.ts";
 import { HttpError, mediaUrl, readLimited, safeLog, safeRequest, upstreamHeaders } from "./security.ts";
 
 type Session = {
   id: string; owner: string; upstream: string; headers: Record<string, string>;
   capabilities: BrowserCapabilities; preferences: PlaybackPreferences; probe: MediaProbe;
-  resources: Map<string, string>; secret: string; directory: string; generation: number;
+  resources: HlsResources; secret: string; directory: string; generation: number;
   mode: PlaybackMode; attempted: PlaybackMode[]; audioIndex: number; offset: number;
   heartbeat: number; created: number; speed?: number; error?: string; child?: ChildProcess;
   controller: AbortController; changing: boolean; disposed: boolean; paused?: boolean;
@@ -63,7 +64,7 @@ export class PlaybackSessions {
     if (this.sessions.size >= config.maxSessions || [...this.sessions.values()].filter((s) => s.owner === owner).length >= 3) throw new HttpError(429, "Stop another playback session before starting this one.");
     const id = opaqueId();
     const session: Session = { id, owner, upstream: mediaUrl(input.url).toString(), headers: upstreamHeaders(input.headers),
-      capabilities: input.capabilities, preferences: input.preferences, resources: new Map(), secret: opaqueId(),
+      capabilities: input.capabilities, preferences: input.preferences, resources: new HlsResources(), secret: opaqueId(),
       directory: join(this.root, id), generation: 0, mode: "relay", attempted: input.previous ?? [],
       audioIndex: -1, offset: 0, heartbeat: Date.now(), created: Date.now(), controller: new AbortController(), changing: false, disposed: false,
       probe: { container: "unknown", duration: 0, audio: [], subtitles: [], seekable: false } };
@@ -145,11 +146,6 @@ export class PlaybackSessions {
     if (session.child?.exitCode === null && session.child.signalCode === null) session.child.kill(paused ? "SIGSTOP" : "SIGCONT");
     session.paused = paused;
   }
-  private register(session: Session, url: string) {
-    for (const [id, value] of session.resources) if (value === url) return id;
-    if (session.resources.size > 8192) throw new HttpError(413, "Playlist contains too many resources.");
-    const id = opaqueId(); session.resources.set(id, url); return id;
-  }
   private async internal(request: IncomingMessage, response: ServerResponse) {
     const match = /^\/([A-Za-z0-9_-]{32})\/([A-Za-z0-9_-]{32})\/([A-Za-z0-9_-]+)(?:\.(?:m3u8|ts|m4s|mp4|m4a|aac|mp3|vtt|webvtt|cmfv|cmfa))?$/.exec(request.url ?? "");
     if (!match || !["GET", "HEAD"].includes(request.method ?? "")) throw new HttpError(404, "Not found.");
@@ -179,10 +175,14 @@ export class PlaybackSessions {
       const type = String(incoming.headers["content-type"] ?? "application/octet-stream");
       if (/mpegurl/i.test(type) || /\.m3u8(?:\?|$)/i.test(url)) {
         const text = (await readLimited(incoming, 2 * 1024 * 1024)).toString();
+        session.resources.prune();
+        const children = new Set<string>();
         const playlist = rewritePlaylist(text, upstream.url.toString(), (child) => {
-          const key = this.register(session, child);
+          const key = session.resources.register(child);
+          children.add(key);
           return internal ? `${this.internalBase}/${session.secret}/${session.id}/${key}${readerSuffix(child)}` : `/api/companion/sessions/${session.id}/media/${key}`;
         });
+        session.resources.updatePlaylist(resource, children);
         response.writeHead(200, { "content-type": "application/vnd.apple.mpegurl", "cache-control": "no-store" }); response.end(playlist); return;
       }
       const output: Record<string, string | number> = { "content-type": /^(?:video|audio)\/|^application\/(?:octet-stream|mp4|vnd\.apple\.mpegurl|x-mpegurl)/i.test(type) ? type : "application/octet-stream", "cache-control": "no-store", "x-content-type-options": "nosniff" };

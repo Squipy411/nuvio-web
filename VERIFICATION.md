@@ -18,8 +18,8 @@ deployment lessons were reused, not its UI or account model.
 | Current strict frontend typecheck | Passed |
 | Current regression suite | **254 passed, 0 failed**, including the author's latest decoder lifecycle fixes and LAN-safe worker IDs |
 | Companion strict typecheck | Passed |
-| Companion policy/security and real FFmpeg integration suite | **21 passed, 0 failed, 0 skipped** with `NUVIO_MEDIA_TEST=1`, including inside the production-equivalent Docker build |
-| Real Chrome player suite | **9 scenarios passed twice consecutively: 18 passed** |
+| Companion policy/security and real FFmpeg integration suite | **24 passed, 0 failed, 0 skipped** with `NUVIO_MEDIA_TEST=1`; the preceding 21-test suite also passed inside the production-equivalent Docker build |
+| Real Chrome player suite | **10 scenarios passed** after review fixes; preceding nine-scenario suite also passed twice consecutively |
 | Post-polish responsive settings/player check | Passed |
 | Production build | Passed; existing large-chunk and English-locale import warnings remain |
 | Built PWA shell/offline/private-cache test | **1 passed** |
@@ -79,6 +79,10 @@ The release checks also reproduced and fixed the original worker's HTTP-LAN
 `randomUUID` startup failure without weakening randomness. HLS reader URLs now
 retain safe media-type suffixes for FFmpeg 7's extension checks while keeping
 provider paths and secrets opaque; TS, fMP4 and extensionless HLS are tested.
+Review regressions verify that progress continues after falling back to the
+original browser player, and that 15,000 two-second live-playlist windows do not
+exhaust the opaque-resource registry. The latter is a simulated clock test of
+resource retention, not an eight-hour high-bitrate streaming benchmark.
 
 ## Performance and visual evidence
 
