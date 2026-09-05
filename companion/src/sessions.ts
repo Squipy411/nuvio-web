@@ -9,7 +9,7 @@ import { choosePlaybackMode, type BrowserCapabilities, type CompanionPlayback, t
 import { opaqueId } from "./auth.ts";
 import { config } from "./config.ts";
 import { ffmpegArguments, startFfmpeg, stopProcess } from "./ffmpeg.ts";
-import { rewritePlaylist } from "./playlist.ts";
+import { readerSuffix, rewritePlaylist } from "./playlist.ts";
 import { probeMedia } from "./probe.ts";
 import { HttpError, mediaUrl, readLimited, safeLog, safeRequest, upstreamHeaders } from "./security.ts";
 
@@ -151,7 +151,7 @@ export class PlaybackSessions {
     const id = opaqueId(); session.resources.set(id, url); return id;
   }
   private async internal(request: IncomingMessage, response: ServerResponse) {
-    const match = /^\/([A-Za-z0-9_-]{32})\/([A-Za-z0-9_-]{32})\/([A-Za-z0-9_-]+)$/.exec(request.url ?? "");
+    const match = /^\/([A-Za-z0-9_-]{32})\/([A-Za-z0-9_-]{32})\/([A-Za-z0-9_-]+)(?:\.(?:m3u8|ts|m4s|mp4|m4a|aac|mp3|vtt|webvtt|cmfv|cmfa))?$/.exec(request.url ?? "");
     if (!match || !["GET", "HEAD"].includes(request.method ?? "")) throw new HttpError(404, "Not found.");
     const session = this.sessions.get(match[2]);
     if (!session || session.secret !== match[1] || session.disposed) throw new HttpError(404, "Not found.");
@@ -181,7 +181,7 @@ export class PlaybackSessions {
         const text = (await readLimited(incoming, 2 * 1024 * 1024)).toString();
         const playlist = rewritePlaylist(text, upstream.url.toString(), (child) => {
           const key = this.register(session, child);
-          return internal ? `${this.internalBase}/${session.secret}/${session.id}/${key}` : `/api/companion/sessions/${session.id}/media/${key}`;
+          return internal ? `${this.internalBase}/${session.secret}/${session.id}/${key}${readerSuffix(child)}` : `/api/companion/sessions/${session.id}/media/${key}`;
         });
         response.writeHead(200, { "content-type": "application/vnd.apple.mpegurl", "cache-control": "no-store" }); response.end(playlist); return;
       }

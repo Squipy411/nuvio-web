@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { publicAddress, mediaUrl, upstreamHeaders, safeRequest } from "../src/security.ts";
-import { rewritePlaylist } from "../src/playlist.ts";
+import { readerSuffix, rewritePlaylist } from "../src/playlist.ts";
 import { toWebVtt } from "../src/subtitles.ts";
 
 test("SSRF blocks private, reserved, link-local, multicast, mapped IPv6 and metadata destinations", () => {
@@ -29,4 +29,10 @@ test("SRT and text ASS convert to timestamped WebVTT, image subtitles are reject
   assert.match(toWebVtt("1\n00:00:01,000 --> 00:00:03,000\nHello\n"), /WEBVTT\n\n1\n00:00:01.000/);
   assert.match(toWebVtt("[Events]\nDialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,{\\b1}Hello\\Nworld"), /Hello\nworld/);
   assert.throws(() => toWebVtt("PGS binary"), /format is not supported/);
+});
+test("private HLS reader hints preserve media types without exposing provider filenames", () => {
+  assert.equal(readerSuffix("https://video.example/private/segment.m4s?token=secret"), ".m4s");
+  assert.equal(readerSuffix("https://video.example/init.MP4"), ".mp4");
+  assert.equal(readerSuffix("https://video.example/opaque-segment"), ".ts");
+  assert.equal(readerSuffix("https://video.example/untrusted.exe"), ".ts");
 });

@@ -1,5 +1,13 @@
 import { HttpError, mediaUrl } from "./security.ts";
 
+/** Keep FFmpeg's media-extension checks enabled without exposing provider paths.
+ * MPEG-TS is also an accepted HLS suffix for AAC/fMP4 in FFmpeg, so extensionless
+ * provider endpoints use that media hint. Routing still uses only the opaque ID.
+ */
+export function readerSuffix(url: string) {
+  return /\.(m3u8|ts|m4s|mp4|m4a|aac|mp3|vtt|webvtt|cmfv|cmfa)$/i.exec(new URL(url).pathname)?.[0].toLowerCase() ?? ".ts";
+}
+
 /** Every HLS child becomes an opaque session resource, including URI attributes. */
 export function rewritePlaylist(text: string, base: string, register: (url: string) => string): string {
   if (!text.trimStart().startsWith("#EXTM3U")) throw new HttpError(415, "Invalid HLS playlist.");

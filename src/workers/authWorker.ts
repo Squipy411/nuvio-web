@@ -2,12 +2,13 @@
 
 import type { AuthUser, BackendConfig } from "../types";
 import { deleteValue, getValue, setValue } from "../lib/idb";
+import { randomId } from "../lib/randomId.ts";
 
 const SESSION_KEY = "refresh-session";
 const BACKEND_KEY = "backend-config";
 const AUTH_LOCK_KEY = "nuvio-web-auth-session";
 const AUTH_CHANNEL_NAME = "nuvio-web-auth-vault-v2";
-const workerId = globalThis.crypto.randomUUID();
+const workerId = randomId();
 const authChannel = new BroadcastChannel(AUTH_CHANNEL_NAME);
 
 type WorkerCommand =

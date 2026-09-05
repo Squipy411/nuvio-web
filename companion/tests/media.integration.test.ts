@@ -21,7 +21,7 @@ test("real FFmpeg media matrix, authenticated HTTP, byte ranges, seek, audio out
     if (path === "/broken") { res.writeHead(404); res.end(); return; }
     const name = path.startsWith("/headers/") ? path.slice(9) : path.slice(1);
     if (path.startsWith("/headers/")) { customHeaders.push(String(req.headers.referer)); if (req.headers.referer !== "https://allowed.example/") { res.writeHead(403); res.end(); return; } }
-    if (!/^(?:direct\.mp4|remux\.mkv|audio\.mkv|hevc\.mkv|hevc10\.mkv|av1\.webm|sample\.srt|hls\/[a-z0-9.]+)$/.test(name)) { res.writeHead(404); res.end(); return; }
+    if (!/^(?:direct\.mp4|remux\.mkv|audio\.mkv|hevc\.mkv|hevc10\.mkv|av1\.webm|sample\.srt|hls(?:-fmp4|-extensionless)?\/[a-z0-9.-]+)$/.test(name)) { res.writeHead(404); res.end(); return; }
     const file = join(directory, name); const info = await stat(file).catch(() => null);
     if (!info) { res.writeHead(404); res.end(); return; }
     const range = req.headers.range; if (range) ranges.push(range);
@@ -90,14 +90,16 @@ test("real FFmpeg media matrix, authenticated HTTP, byte ranges, seek, audio out
       assert.equal((await fetch(origin + session.url)).status, 401); await stop(session);
     });
     await t.test("HLS playlists are probed and every media URI stays behind authentication", async () => {
-      const session = await create("hls/index.m3u8"); assert.equal(session.mode, "relay");
-      const response = await fetch(origin + session.url, { headers: { cookie } });
-      assert.equal(response.status, 200); const playlist = await response.text();
-      assert.ok(!playlist.includes("media-fixtures.invalid"));
-      const segment = playlist.split("\n").find((line) => line.startsWith("/api/companion/")); assert.ok(segment, playlist);
-      assert.equal((await fetch(origin + segment, { headers: { cookie } })).status, 200);
-      assert.equal((await fetch(origin + segment)).status, 401);
-      await stop(session);
+      for (const file of ["hls/index.m3u8", "hls-fmp4/index.m3u8", "hls-extensionless/index.m3u8"]) {
+        const session = await create(file); assert.equal(session.mode, "relay");
+        const response = await fetch(origin + session.url, { headers: { cookie } });
+        assert.equal(response.status, 200); const playlist = await response.text();
+        assert.ok(!playlist.includes("media-fixtures.invalid"));
+        const segment = playlist.split("\n").find((line) => line.startsWith("/api/companion/")); assert.ok(segment, playlist);
+        assert.equal((await fetch(origin + segment, { headers: { cookie } })).status, 200);
+        assert.equal((await fetch(origin + segment)).status, 401);
+        await stop(session);
+      }
     });
     for (const [file, mode, codecCaps] of [
       ["remux.mkv", "remux", caps], ["audio.mkv", "audio-transcode", caps], ["hevc.mkv", "transcode", caps],

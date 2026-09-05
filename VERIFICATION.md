@@ -16,16 +16,17 @@ deployment lessons were reused, not its UI or account model.
 | --- | --- |
 | Original upstream install/typecheck/test/build before changes | Passed; 246 tests |
 | Current strict frontend typecheck | Passed |
-| Current original regression suite | **252 passed, 0 failed**, including the author's latest decoder lifecycle fixes |
+| Current regression suite | **254 passed, 0 failed**, including the author's latest decoder lifecycle fixes and LAN-safe worker IDs |
 | Companion strict typecheck | Passed |
 | Companion policy/security and real FFmpeg integration suite | **20 passed, 0 failed, 0 skipped** with `NUVIO_MEDIA_TEST=1` |
 | Real Chrome player suite | **9 scenarios passed twice consecutively: 18 passed** |
 | Post-polish responsive settings/player check | Passed |
 | Production build | Passed; existing large-chunk and English-locale import warnings remain |
 | Built PWA shell/offline/private-cache test | **1 passed** |
+| Plain LAN HTTP real auth-worker check | **1 passed**; synthetic rejection round-trip, not a live account sign-in |
 | Dependency audit, frontend and companion | 0 known vulnerabilities reported at verification time |
 | Compose schema and configuration | Passed using Docker Compose **5.5.1** |
-| Docker image build/container startup/restart | **Not run: no available Docker daemon** |
+| Docker image build/container startup/restart | Initial CI detected newer FFmpeg HLS extension checks; media hints fixed, rerun pending |
 | Personal fork | Verified `Squipy411/nuvio-web`; connected as origin with push permission |
 | GHCR publishing/anonymous pull | Pending release workflow and package availability verification |
 | Live account sync and physical Apple/Android/Edge devices | **Not tested in this task** |
@@ -74,6 +75,10 @@ empty temporary session directories after stop.
 The tests caught and fixed native-HLS transport recovery, temporary pause versus
 user pause during rapid seeking, queued source changes, stale-generation
 heartbeats and retaining original-timeline progress through player teardown.
+The release checks also reproduced and fixed the original worker's HTTP-LAN
+`randomUUID` startup failure without weakening randomness. HLS reader URLs now
+retain safe media-type suffixes for FFmpeg 7's extension checks while keeping
+provider paths and secrets opaque; TS, fMP4 and extensionless HLS are tested.
 
 ## Performance and visual evidence
 

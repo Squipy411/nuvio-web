@@ -1,9 +1,11 @@
 name: Verify and publish personal self-hosted images
 on:
   pull_request:
+    paths-ignore: ['**/*.md', 'docker-compose.zima.yml']
   push:
     branches: [main]
     tags: ['v*']
+    paths-ignore: ['**/*.md', 'docker-compose.zima.yml']
   workflow_dispatch:
 permissions:
   contents: read
