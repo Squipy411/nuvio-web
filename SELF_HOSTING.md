@@ -1,21 +1,24 @@
 # Personal self-hosted Nuvio Web
 
-## Current release gate
+## Verified private release
 
 The personal fork is **[Squipy411/nuvio-web](https://github.com/Squipy411/nuvio-web)**.
-Its release workflow verifies the application before publishing
+Its [successful release workflow](https://github.com/Squipy411/nuvio-web/actions/runs/33984101019) published
 `ghcr.io/squipy411/nuvio-web-web` and `ghcr.io/squipy411/nuvio-web-companion`.
-**Until that workflow succeeds, the generated installer is not ready to import.**
-The local Linux verification machine has no running Docker engine; the workflow
-performs the production Docker build and startup checks on GitHub's runner.
+**Both images were authenticated-pulled, anonymous access was denied, and the
+freshly pulled Docker stack passed startup and restart checks.** The installer
+is pinned to `ff5a372dcd773fcd1ec7f0735c15268b34704c49`.
+Actual ZimaOS dashboard import still requires the host's registry login and a
+live host-side check; it has not been claimed as completed.
 Do not import `deployment/compose.zima.template.yml` into ZimaOS.
 
-## Intended one-file installation
+## One-file installation after registry sign-in
 
-After the verified personal-fork workflow finishes, download its
-**zimaos-installer** artifact. It contains the complete **docker-compose.zima.yml**,
+Use the checked-in [docker-compose.zima.yml](docker-compose.zima.yml), or download
+the successful workflow's **zimaos-installer** artifact. It contains the same complete file,
 with prebuilt amd64 images named from the actual repository and pinned to that
-commit. In ZimaOS choose Add/Import Custom App, paste that one file and install.
+commit. First complete the private registry sign-in described below. Then, in
+ZimaOS choose Add/Import Custom App, paste that one file and install.
 Open **http://ZIMA-IP:3075** or click the Nuvio Web dashboard icon.
 
 There is no npm, Node, FFmpeg or Nginx installation on the Zima host. The frontend

@@ -2,7 +2,7 @@
 name: nuvio-web
 services:
   web:
-    image: ghcr.io/squipy411/nuvio-web-web:latest
+    image: ghcr.io/squipy411/nuvio-web-web:sha-ff5a372dcd773fcd1ec7f0735c15268b34704c49
     restart: unless-stopped
     ports:
       - "3075:8080"
@@ -22,7 +22,7 @@ services:
       retries: 3
       start_period: 10s
   companion:
-    image: ghcr.io/squipy411/nuvio-web-companion:latest
+    image: ghcr.io/squipy411/nuvio-web-companion:sha-ff5a372dcd773fcd1ec7f0735c15268b34704c49
     restart: unless-stopped
     init: true
     networks: [nuvio]

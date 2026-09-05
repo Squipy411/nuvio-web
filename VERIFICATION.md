@@ -2,9 +2,10 @@
 
 ## Status
 
-**Implemented and locally verified; not yet a published, fresh-install-tested ZimaOS release.**
+**Private images published and fresh Docker startup/restart verified.
+Live ZimaOS dashboard installation remains unverified and needs registry sign-in.**
 The source includes lucaboox/nuvio-web through `ec8e3cf10c78eeba6e26a2520b96ace78950e881`,
-with isolated companion additions on `codex/self-hosted-companion`.
+with companion additions merged into `Squipy411/nuvio-web` main via pull request #1.
 The failed Next.js site, including its previous Git history and local data,
 was preserved in the sibling `NUVIO-previous-20260905` directory. It is not the
 application's foundation. Its security, generated-media testing and single-port
@@ -18,7 +19,7 @@ deployment lessons were reused, not its UI or account model.
 | Current strict frontend typecheck | Passed |
 | Current regression suite | **254 passed, 0 failed**, including the author's latest decoder lifecycle fixes and LAN-safe worker IDs |
 | Companion strict typecheck | Passed |
-| Companion policy/security and real FFmpeg integration suite | **24 passed, 0 failed, 0 skipped** with `NUVIO_MEDIA_TEST=1`; the preceding 21-test suite also passed inside the production-equivalent Docker build |
+| Companion policy/security and real FFmpeg integration suite | **24 passed, 0 failed, 0 skipped** with `NUVIO_MEDIA_TEST=1`, also passed inside the production-equivalent Docker build |
 | Real Chrome player suite | **10 scenarios passed** after review fixes; preceding nine-scenario suite also passed twice consecutively |
 | Post-polish responsive settings/player check | Passed |
 | Production build | Passed; existing large-chunk and English-locale import warnings remain |
@@ -26,9 +27,10 @@ deployment lessons were reused, not its UI or account model.
 | Plain LAN HTTP real auth-worker check | **1 passed**; synthetic rejection round-trip, not a live account sign-in |
 | Dependency audit, frontend and companion | 0 known vulnerabilities reported at verification time |
 | Compose schema and configuration | Passed using Docker Compose **5.5.1** |
-| Docker image build/container startup/restart | **Passed** in [GitHub run 33983458104](https://github.com/Squipy411/nuvio-web/actions/runs/33983458104); initial FFmpeg 7 HLS extension issue fixed |
+| Docker image build/container startup/restart | **Passed** in [release run 33984101019](https://github.com/Squipy411/nuvio-web/actions/runs/33984101019), including the freshly published and pulled images |
 | Personal fork | Verified `Squipy411/nuvio-web`; connected as origin with push permission |
-| GHCR publishing/anonymous pull | Pending release workflow; owner explicitly chose private images, anonymous access must remain denied |
+| GHCR publishing/authenticated pull | **Both images published and pulled successfully**, pinned to `sha-ff5a372dcd773fcd1ec7f0735c15268b34704c49` |
+| GHCR privacy | **Both package settings private; fresh anonymous access denied** locally and in the successful release job |
 | Live account sync and physical Apple/Android/Edge devices | **Not tested in this task** |
 
 Compose's downloaded executable was checked against its official release SHA256:
@@ -103,14 +105,16 @@ resource retention, not an eight-hour high-bitrate streaming benchmark.
 
 ## Honest remaining limits / next release gates
 
-1. Publish through the prepared workflow in `Squipy411/nuvio-web` and verify both
-   images. The upstream repo has no explicit
-   redistribution license; obtain permission before making distribution public.
+1. The owner explicitly chose private images. Authenticate the actual Zima
+   Docker environment to GHCR once before importing the installer. Never put
+   a token in Compose, source, a command-line password argument or this chat.
+   Upstream has no explicit redistribution license; obtain permission before
+   any later public distribution.
 2. Docker build and production-stack smoke checks now pass on GitHub's Docker
    host. Still perform an actual ZimaOS import, dashboard launch and restart test.
-   The root `docker-compose.zima.yml` now uses the actual fork's image names, but
-   is not install-ready until those images exist and are pullable. The workflow
-   also generates a commit-pinned installer as one complete artifact.
+   The root `docker-compose.zima.yml` matches the workflow's generated installer
+   and references the actual verified private images. It requires registry
+   authentication, not a local build or any manual FFmpeg/Node installation.
 3. Sign in with a real Nuvio account and verify profiles, addons, home, search,
    details, episode/source navigation, cloud progress and reload. Existing
    contracts pass regression tests; the browser player fixture uses explicitly
@@ -124,5 +128,15 @@ resource retention, not an eight-hour high-bitrate streaming benchmark.
    and image subtitles are not implemented; addon text subtitles and external
    handoff are the supported alternatives.
 
+The initial GHCR packages were briefly publicly pullable; the release privacy
+check blocked installer emission. Both package settings were changed to private,
+fresh anonymous requests were denied, and the publishing job was rerun successfully.
+The images contain code and public backend configuration, not personal account data.
 No personal account credentials were requested, copied or committed. No changes
-were pushed to the original author's repository, and no public release was made.
+were pushed to the original author's repository.
+
+Verified registry digests for the released commit tag:
+
+- Web: `sha256:e626f221509c89f906aae3bc5407c40a7dc13c52ac64187efbe486961a06fef5`.
+- Companion: `sha256:1212e417ec6226032a519a8d784eb0c71d01fd16d85e3076bbc0c4e72840bc6b`.
+- Installer ZIP: `sha256:47e7ec8e0620914080f1e4fd34d9e5a9cb212247f6a97207b413f5b8f395c829`.

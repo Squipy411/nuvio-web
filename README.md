@@ -14,9 +14,12 @@ See [SELF_HOSTING.md](SELF_HOSTING.md) for the two-container deployment,
 [VERIFICATION.md](VERIFICATION.md) for measured results and outstanding checks,
 and [UPSTREAM_NOTICE.md](UPSTREAM_NOTICE.md) before distributing builds.
 
-**Installer status:** images are not published yet. The publishing workflow
-generates `docker-compose.zima.yml` from the actual personal fork; the source
-template is not an install-ready substitute.
+**Private installer:** [docker-compose.zima.yml](docker-compose.zima.yml) uses
+published, commit-pinned amd64 images verified by authenticated download,
+container startup and restart. Both packages are private, as requested.
+Authenticate the Zima host to GHCR once before importing this file; follow
+[SELF_HOSTING.md](SELF_HOSTING.md). The source template is not the installer.
+An actual ZimaOS dashboard import still needs host-side verification.
 
 ## Run
 
