@@ -113,6 +113,8 @@ jobs:
           push: true
           tags: ${{ steps.companion-meta.outputs.tags }}
           labels: ${{ steps.companion-meta.outputs.labels }}
+      - name: Pull the published private images and verify a fresh stack and restart
+        run: node scripts/verify-private-images.mjs
       - name: Generate one-file installer using the actual repository and immutable commit tag
         env:
           IMAGE_TAG: sha-${{ github.sha }}

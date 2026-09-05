@@ -81,13 +81,28 @@ pushes publish `latest` and `sha-<full-commit>`; version tags also publish the t
 The installer generator uses `GITHUB_REPOSITORY`, or a verified GitHub `origin`
 when run locally, and refuses the upstream repository as its publishing target.
 
-GitHub initially makes new packages private. The workflow does not change their
-visibility. Anonymous Zima pulls require both packages to be public **and** the
-upstream redistribution permission described in [UPSTREAM_NOTICE.md](UPSTREAM_NOTICE.md).
-With that permission, open each package on GitHub → Package settings → Change
-visibility → Public, then verify an anonymous pull of **both** images. Do not put
-GitHub tokens in Compose. Private packages require registry authentication on
-the host, which is not the requested credential-free one-paste experience.
+**The owner chose to keep both images private.** The workflow does not change
+visibility: it pulls each published image using its temporary job login, verifies
+anonymous access is denied, then starts and restarts that freshly pulled stack.
+This private-image gate intentionally prevents claiming an anonymous installer.
+
+Before importing the Compose file, authenticate the Zima host to `ghcr.io` as
+`Squipy411` using a GitHub personal access token (classic) with only
+`read:packages`. Enter that credential in the host's registry login, **never**
+in Compose, this repository, a command-line password argument, or this chat.
+Docker's interactive command is `docker login ghcr.io --username Squipy411`;
+paste the token only at its hidden password prompt. The credential must belong
+to the Docker environment that actually pulls the Zima app images.
+If the dashboard does not use that login, pull both exact image references from
+the installer on the host first, then import the app. Dashboard-specific private
+registry handling has not been verified on a live ZimaOS install in this task.
+
+Private images necessarily add this one-time sign-in step. No manual application
+build, Node/FFmpeg/Nginx installation, or container-file editing is needed.
+Making both packages public later would remove the registry sign-in requirement,
+but needs the redistribution permission described in
+[UPSTREAM_NOTICE.md](UPSTREAM_NOTICE.md), an explicit owner decision, and removal
+of the workflow's intentional private-image gate before an anonymous pull check.
 See [GitHub's registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
 
 To update, import the generated installer from the next successful workflow run
