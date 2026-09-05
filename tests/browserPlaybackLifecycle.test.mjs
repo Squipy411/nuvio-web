@@ -69,10 +69,16 @@ test('old seek frame cannot paint over a newer seek', async () => {
   assert.deepEqual(drawn, [2]);
 });
 
-test('missing decoded frame is an error, not a ready black screen', async () => {
+test('a seek with no still frame keeps playing rather than failing', async () => {
+  // The still drawn at a seek destination is a courtesy. Throwing when one
+  // cannot be produced ended playback — and a resumed episode seeks to its
+  // saved position first, so the same file played or died depending on where
+  // it was left. That is what made it work one time and not the next.
+  // Whether frames decode at all is the decode loop's business, and it
+  // reports for itself.
   const p = player();
   p.videoSink = { getCanvas: async () => null };
-  await assert.rejects(p.seek(0), /No video frame/);
+  await assert.doesNotReject(p.seek(0));
 });
 
 test("iOS takes the native path, because the canvas one cannot have audio", () => {

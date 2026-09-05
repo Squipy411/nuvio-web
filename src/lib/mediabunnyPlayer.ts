@@ -631,9 +631,21 @@ export class MediabunnyPlayer {
     // A still frame at the destination, so scrubbing shows where it landed
     // rather than freezing on where it left.
     if (this.videoSink) {
-      const frame = await this.videoSink.getCanvas(target);
+      /*
+       * A frame here is a courtesy, not a requirement.
+       *
+       * This draws a still at the destination so scrubbing shows where it
+       * landed. Throwing when one cannot be produced turned a cosmetic miss
+       * into the end of playback — and the first thing a resumed episode does
+       * is seek to its saved position, so the same file played or died
+       * depending on where you left off. That is what made it intermittent.
+       *
+       * The decode loop is what actually has to work, and it reports for
+       * itself. If nothing ever reaches the canvas the player says so after a
+       * few seconds; until then, playing on with no still beats stopping.
+       */
+      const frame = await this.videoSink.getCanvas(target).catch(() => null);
       if (this.stopped || this.generation !== generation) return;
-      if (!frame) throw new Error("No video frame could be decoded at this position. Try another source or an external player.");
       if (frame) this.draw(frame);
     }
     if (wasPlaying) await this.play();
