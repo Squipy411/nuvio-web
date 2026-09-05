@@ -13,6 +13,7 @@ import type {
   WatchedItem,
 } from "../types";
 import { platform } from "../platform/index.ts";
+import { runtimeBackend } from "./runtimeBackend.ts";
 import {
   blobRawValue,
   blobStringPayload,
@@ -94,6 +95,8 @@ platform.auth.onSessionLost(() => {
 });
 
 export function officialBackend(): BackendConfig | null {
+  const runtime = runtimeBackend();
+  if (runtime) return { url: runtime.backendUrl, key: runtime.publishableKey, selfHosted: false };
   const url = import.meta.env.VITE_NUVIO_SUPABASE_URL?.trim().replace(
     /\/+$/,
     "",

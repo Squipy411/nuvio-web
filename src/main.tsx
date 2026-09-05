@@ -6,6 +6,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary";
 import { setRegistration, setUpdateHandler } from "./lib/appUpdate";
 import { applyStoredLanguage } from "./lib/i18n.ts";
 import { lockZoom } from "./lib/lockZoom";
+import { loadRuntimeBackend } from "./lib/runtimeBackend.ts";
 import "./styles.css";
 
 const updateSW = import.meta.env.PROD
@@ -69,5 +70,4 @@ function render() {
  *
  * It renders regardless if that fails: an app in English beats no app.
  */
-void applyStoredLanguage().finally(render);
-
+void Promise.all([applyStoredLanguage(), loadRuntimeBackend()]).finally(render);

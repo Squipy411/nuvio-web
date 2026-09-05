@@ -55,6 +55,7 @@ import { setBootSplashVisible } from "./lib/bootSplash.ts";
 import { PlaybackPolicySettings } from "./components/PlaybackPolicySettings";
 import { FusionBadgeSettings } from "./components/FusionBadgeSettings";
 import { resolveAutoStream, selectAutoStream } from "./lib/playbackPolicy";
+import { CompanionSettings } from "./components/CompanionSettings.tsx";
 import { AccentPicker } from "./components/AccentPicker";
 import { DetailsDebugToggle } from "./components/DetailsDebug";
 import { applyResolvedTheme } from "./lib/themeCache";
@@ -2537,6 +2538,7 @@ export function App() {
            rebuilt home from scratch and only then re-opened details. */
         <Player
           {...playback}
+          addons={addons}
           settings={webSettings.player}
           blurUnwatchedEpisodes={webSettings.metaScreen.blurUnwatchedEpisodes}
           animeSkipClientId={providerCredential(providerCredentials, "animeskip", "client_id")}
@@ -5181,6 +5183,7 @@ function SettingsPage({
           ))}
         </div>
       </div>
+      {!platform.player && category === "playback" && <CompanionSettings />}
       {!platform.player && <div
         className="setting-card web-only-card settings-category-card"
         hidden={category !== "playback"}

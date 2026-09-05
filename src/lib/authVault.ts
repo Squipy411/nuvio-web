@@ -16,6 +16,7 @@ import type { AuthApi } from "../platform/types.ts";
 import type { BackendConfig, Session } from "../types";
 
 type VaultCommand =
+  | { type: "companionSession" }
   | { type: "signIn"; backend: BackendConfig; email: string; password: string }
   | { type: "signOut" }
   | { type: "restore" }
@@ -86,6 +87,7 @@ function vaultCall<T>(command: VaultCommand): Promise<T> {
 }
 
 export const authVault: AuthApi = {
+  companionSession: () => vaultCall<{ csrf: string; expires: number }>({ type: "companionSession" }),
   signIn: (backend, email, password) =>
     vaultCall<Session>({ type: "signIn", backend, email, password }),
   restore: () => vaultCall<Session>({ type: "restore" }),
