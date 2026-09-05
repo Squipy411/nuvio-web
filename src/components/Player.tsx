@@ -152,6 +152,20 @@ function runtimeHintSeconds(meta: Meta, video?: Video) {
   return bareMinutes > 0 ? bareMinutes * 60 : undefined;
 }
 
+/**
+ * The players this stream can be handed off to.
+ *
+ * "Open with" means another application. The native player is this one — it
+ * plays here, through the browser's own video element — so it belongs in the
+ * "Play in" list where a source is chosen, and not in a menu whose whole
+ * meaning is leaving.
+ */
+function handoffOptions() {
+  return platform.externalPlayer
+    .options("player")
+    .filter((option) => option.mode !== "native");
+}
+
 export function Player({
   stream,
   meta,
@@ -167,6 +181,7 @@ export function Player({
   onPlayEpisode,
   blurUnwatchedEpisodes = false,
   animeSkipClientId = "",
+  mode,
 }: {
   stream: Stream;
   meta: Meta;
@@ -192,6 +207,12 @@ export function Player({
   blurUnwatchedEpisodes?: boolean;
   animeSkipClientId?: string;
   watchIndex?: WatchIndex;
+  /**
+   * Which in-app player was chosen for this stream. "native" plays through the
+   * browser's own video element, remuxing Matroska for it, which is the only
+   * way to get audio Safari can decode but WebCodecs will not admit to.
+   */
+  mode?: ExternalPlayerMode;
   /** Resolves a source for another episode and switches to it. */
   onPlayEpisode?(next: Video): void;
   /** Reports a resume point. Fired periodically, on pause, and on exit. */
@@ -221,6 +242,8 @@ export function Player({
   const hideTimer = useRef<number | undefined>(undefined);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
+  /** Non-fatal: it is playing, but something about it is worth saying. */
+  const [notice, setNotice] = useState("");
   const [playing, setPlaying] = useState(false);
   const playingRef = useRef(false);
   playingRef.current = playing;
@@ -1084,10 +1107,18 @@ export function Player({
     // machine can decode them, so the container is skipped entirely: frames go
     // to a canvas and audio to Web Audio.
     const verdict = assessPlayback(url, sourceText);
-    // Opt-in until real iOS device playback/seek testing is complete. Normal
-    // MKV playback retains the existing canvas fallback.
-    if (/\.mkv(?:$|[?#\s])/i.test(`${url} ${sourceText}`) &&
-      new URLSearchParams(window.location.search).get("nativeMkv") === "1") {
+    /*
+     * Chosen from the player menu, or forced with ?nativeMkv=1 for testing.
+     *
+     * It used to be the query parameter alone, which meant the one path that
+     * plays this audio on an iPhone could only be reached by editing the URL.
+     * Matroska is the only container that needs the remux; anything the video
+     * element already opens falls through to the ordinary native branch below.
+     */
+    const wantsNative =
+      mode === "native" ||
+      new URLSearchParams(window.location.search).get("nativeMkv") === "1";
+    if (wantsNative && /\.mkv(?:$|[?#\s])/i.test(`${url} ${sourceText}`)) {
       const remux = new NativeMkvPlayer(element, url, reason => {
         if (disposed) return;
         setWaiting(false);
@@ -1121,6 +1152,7 @@ export function Player({
           } else if (next.state === "ready" || next.state === "ended") {
             setWaiting(false);
             setStatus("");
+            if (next.message) setNotice(next.message);
             if (next.state === "ended") setPlaying(false);
           } else {
             setWaiting(true);
@@ -1879,7 +1911,7 @@ export function Player({
                 </div>
               )}
             </div>
-            {!nativePlayer && externalUrl && !!platform.externalPlayer.options("player").length && (
+            {!nativePlayer && externalUrl && !!handoffOptions().length && (
               <div className="external-player-picker">
                 <button
                   className={externalPlayerOpen ? "active" : ""}
@@ -1895,7 +1927,7 @@ export function Player({
                 {externalPlayerOpen && (
                   <div className="external-player-menu">
                     <strong>Open with</strong>
-                    {platform.externalPlayer.options("player").map((option) => (
+                    {handoffOptions().map((option) => (
                       <button
                         key={option.mode}
                         onClick={() => openExternalPlayer(option.mode)}
@@ -2061,6 +2093,14 @@ export function Player({
           </aside>
         </div>
       )}
+      {notice && !error && (
+        <div className="player-notice" role="status">
+          <span>{notice}</span>
+          <button type="button" onClick={() => setNotice("")}>
+            {t("common.dismiss")}
+          </button>
+        </div>
+      )}
       {error && (
         <div className="player-error">
           <strong>Browser playback unavailable</strong>
@@ -2093,11 +2133,11 @@ export function Player({
           {/* What can play it, offered where it failed. Being told the
               browser cannot decode something is only half an answer; the other
               half is the list of things that can. */}
-          {!nativePlayer && externalUrl && !!platform.externalPlayer.options("player").length && (
+          {!nativePlayer && externalUrl && !!handoffOptions().length && (
             <div className="player-error-players">
               <small>Play it in</small>
               <div>
-                {platform.externalPlayer.options("player").map((option) => (
+                {handoffOptions().map((option) => (
                   <button
                     key={option.mode}
                     onClick={() => openExternalPlayer(option.mode)}

@@ -116,6 +116,16 @@ const EVERYWHERE = [
 
 const externalPlayerDefinitions: readonly ExternalPlayerDefinition[] = [
   {
+    // Offered first: where it is offered at all, it is the one that fixes the
+    // complaint that brought someone to this menu.
+    mode: "native",
+    label: "Native video player",
+    // Apple only for now. This is the platform whose canvas player loses
+    // audio, and the remux path has not been tried anywhere else.
+    platforms: { settings: ["apple-mobile", "macos"], player: ["apple-mobile", "macos"] },
+    reportsBack: true,
+  },
+  {
     mode: "copy",
     // Pasting a URL into a player works on every platform, so this is offered
     // as a default on every platform too.
@@ -209,6 +219,7 @@ export function externalPlayerLabel(mode: ExternalPlayerMode) {
 
 export const isExternalPlayerAvailable = (mode: ExternalPlayerMode) =>
   mode === "internal" ||
+  mode === "native" ||
   externalPlayerOptions("settings").some((option) => option.mode === mode);
 
 function m3uFor(url: string, title: string) {

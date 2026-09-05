@@ -3,6 +3,22 @@
 import { describeTransfer, probeSource, statusReason } from "./sourceProbe.ts";
 import { probeDecoders, summariseDecoders } from "./decoderSupport.ts";
 import { readRetryDelay } from "./requestPolicy.ts";
+import { isAppleWebKit } from "./playback.ts";
+
+/**
+ * What to try when this engine cannot decode something.
+ *
+ * On Apple devices the usual cause is not that the file is unplayable — it is
+ * that WebCodecs refuses audio the platform itself decodes perfectly well
+ * through a video element, which is what the native player uses. Sending
+ * someone to another application for a file their own browser can play is the
+ * wrong advice, and it was the only advice this gave.
+ */
+function advice(): string {
+  return isAppleWebKit()
+    ? "Try the Native video player from the player menu, or an external player."
+    : "Try an external player.";
+}
 import {
   ALL_FORMATS,
   AudioBufferSink,
@@ -221,6 +237,8 @@ export class MediabunnyPlayer {
   private audioCodecs: (string | null)[] = [];
   private audioChannels: number[] = [];
   private audioIndex = 0;
+  /** Audio exists but nothing here can decode it, so playback will be silent. */
+  private silentAudio = false;
   private videoSink: CanvasSink | null = null;
   private audioSink: AudioBufferSink | null = null;
   private context: AudioContext | null = null;
@@ -473,12 +491,13 @@ export class MediabunnyPlayer {
     if (video && !this.videoTrack) trouble.push("its video");
     this.audioTrack = audio;
     if (audioTracks.length && !audio) trouble.push("its audio");
+    this.silentAudio = audioTracks.length > 0 && !audio;
 
     if (!this.videoTrack) {
       this.report(
         "error",
         trouble.length
-          ? `This browser cannot decode ${trouble.join(" or ")}. Try an external player.`
+          ? `This browser cannot decode ${trouble.join(" or ")}. ${advice()}`
           : "This file contains no video or audio track that could be read.",
       );
       this.stop();
@@ -573,7 +592,16 @@ export class MediabunnyPlayer {
     this.startedFrom = this.pausedAt;
     this.contextStartTime = this.clockTime();
     this.run(++this.generation);
-    this.report("ready", "");
+    // Said even when the video is fine. Without it the file simply played with
+    // no sound and no explanation, which reads as a broken app rather than as
+    // audio this engine cannot open — and on Apple there is another player
+    // here that can.
+    this.report(
+      "ready",
+      this.silentAudio
+        ? `This browser cannot decode this file's audio, so it plays silently. ${advice()}`
+        : "",
+    );
   }
 
   pause() {

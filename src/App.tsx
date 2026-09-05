@@ -601,6 +601,12 @@ export function App() {
     meta: Meta;
     video?: Video;
     startAtBeginning?: boolean;
+    /**
+     * Which in-app player to use. Carried on the launch rather than read from
+     * settings inside the player, because the sources panel can choose one for
+     * a single stream without changing what the next one uses.
+     */
+    mode?: ExternalPlayerMode;
   } | null>(null);
   const [loading, setLoading] = useState(false);
   const [resolvingContinue, setResolvingContinue] = useState<Meta | null>(null);
@@ -2722,7 +2728,9 @@ export function App() {
             // The picker in the sources panel wins for this launch only.
             const chosen = player ?? externalPlayer;
             const url = stream.url || stream.externalUrl;
-            if (chosen !== "internal" && url) {
+            // "native" plays here too — it is this app's video element, not
+            // somebody else's application, so there is nothing to hand off.
+            if (chosen !== "internal" && chosen !== "native" && url) {
               // Details stays open: the stream opened elsewhere, so this page
               // is exactly where you want to be when you come back.
               handOffToExternalPlayer(chosen, url, meta, video);
@@ -2730,6 +2738,7 @@ export function App() {
             }
             rememberBingeGroup(meta.id, stream.behaviorHints?.bingeGroup);
             setPlayback({
+              mode: chosen,
               stream,
               meta,
               video,
