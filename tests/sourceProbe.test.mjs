@@ -63,12 +63,30 @@ test("an error status is reported as itself", async () => {
   assert.equal(result.reason, statusReason(403));
 });
 
-test("a refused fetch is put down to cross-origin policy, not the file", async () => {
-  const result = await probeSource("https://h/f.mkv", undefined, 100, async () => {
+test("a refused fetch is diagnosed, not assumed to be cross-origin policy", async () => {
+  // Every network-level refusal rejects with the same opaque TypeError, so
+  // calling all of them CORS states a cause that was never established — and
+  // says it to someone whose console shows no such error. A no-cors retry is
+  // what tells them apart: it cannot read the answer, but it still asks.
+  let attempts = 0;
+  const reachable = await probeSource("https://h/f.mkv", undefined, 100, async (_url, init) => {
+    attempts += 1;
+    if (init?.mode === "no-cors") return new Response(null, { status: 200 });
     throw new TypeError("Failed to fetch");
   });
-  assert.equal(result.ok, false);
-  assert.match(result.reason, /CORS/);
+  assert.equal(reachable.ok, false);
+  assert.match(reachable.reason, /CORS/, "the host answered, so the policy is the cause");
+  assert.equal(attempts, 2, "it has to actually ask a second time");
+
+  const unreachable = await probeSource("https://h/f.mkv", undefined, 100, async () => {
+    throw new TypeError("Failed to fetch");
+  });
+  assert.equal(unreachable.ok, false);
+  assert.doesNotMatch(
+    unreachable.reason,
+    /CORS/,
+    "nothing reached the host, so the policy is irrelevant and must not be blamed",
+  );
 });
 
 test("a host that never answers is a timeout, not a decode failure", async () => {

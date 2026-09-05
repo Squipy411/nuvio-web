@@ -2,6 +2,7 @@ import { ALL_FORMATS, Input, UrlSource, Output, Mp4OutputFormat, AppendOnlyStrea
   EncodedPacketSink, EncodedVideoPacketSource, EncodedAudioPacketSource,
   type InputVideoTrack, type InputAudioTrack, type VideoCodec, type AudioCodec } from 'mediabunny';
 import { readRetryDelay } from './requestPolicy.ts';
+import { describeFetchFailure } from './sourceProbe.ts';
 
 /** No request may hang: an unanswered read left the player loading forever. */
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -46,7 +47,42 @@ export class NativeMkvPlayer {
       maxCacheSize: 16 * 1024 * 1024, getRetryDelay: readRetryDelay,
       requestInit: headers ? { headers } : undefined,
       fetchFn: async (resource, init) => {
-        const response = await fetch(resource, init);
+        /*
+         * A read that never answers used to leave the player loading forever,
+         * and one that was refused reported Safari's bare "Load failed".
+         *
+         * The cause is not guessed here. Every network-level refusal rejects
+         * with the same opaque TypeError, so naming one of them is how a
+         * player ends up insisting on a CORS error that the console does not
+         * show. describeFetchFailure asks the host again in no-cors mode: if
+         * it answers, the policy really is what stopped us; if it does not,
+         * nothing reached it and the policy has nothing to do with it.
+         */
+        const deadline = new AbortController();
+        const timer = setTimeout(() => deadline.abort(), REQUEST_TIMEOUT_MS);
+        let response: Response;
+        try {
+          response = await fetch(resource, {
+            ...init,
+            signal: init?.signal
+              ? AbortSignal.any([init.signal, deadline.signal])
+              : deadline.signal,
+          });
+        } catch (error) {
+          if (deadline.signal.aborted)
+            throw new Error(
+              `This host did not answer within ${Math.round(REQUEST_TIMEOUT_MS / 1000)} seconds. It may be slow, or the link may have expired.`,
+            );
+          if (error instanceof DOMException && error.name === 'AbortError') throw error;
+          throw new Error(
+            await describeFetchFailure(
+              typeof resource === 'string' ? resource : String(resource),
+              headers,
+            ),
+          );
+        } finally {
+          clearTimeout(timer);
+        }
         /*
          * A 200 to a ranged request is only wrong when the range started
          * somewhere other than the beginning.
