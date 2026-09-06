@@ -160,3 +160,41 @@ test("a clock with nothing behind it says so", () => {
     "and quote what the browser said about its decoders, since that is the evidence",
   );
 });
+
+test("iOS is not offered an in-app player, by one decision", () => {
+  // Safari cannot open Matroska, so every in-app route there has to do
+  // something the platform will not — decode with WebCodecs, which has no
+  // audio decoder on iOS, or remux and read the bytes, which the host has to
+  // permit. Both work sometimes. Offering something that usually fails puts
+  // the blame on the app rather than on a container Apple declines to open.
+  const helpers = readFileSync(
+    new URL("../src/lib/externalPlayer.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    helpers,
+    /canPlayInApp = \(\) => playerPlatform\(\) !== "apple-mobile"/,
+    "one place decides it",
+  );
+  assert.match(
+    helpers,
+    /\(\(mode === "internal" \|\| mode === "native"\) && canPlayInApp\(\)\)/,
+    "a preference stored before this must stop resolving",
+  );
+  // The pickers are not the only way in: continue-watching and the next
+  // episode open playback directly, so the guard cannot live in a menu.
+  const player = readFileSync(
+    new URL("../src/components/Player.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    player,
+    /!canPlayInApp\(\) && externalUrl/,
+    "the player itself has to refuse remote streams",
+  );
+  assert.match(
+    player,
+    /https\?:/i,
+    "and downloads, which are local and play fine, must not be caught by it",
+  );
+});

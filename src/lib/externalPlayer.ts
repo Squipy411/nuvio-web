@@ -122,7 +122,7 @@ const externalPlayerDefinitions: readonly ExternalPlayerDefinition[] = [
     label: "Native video player",
     // Apple only for now. This is the platform whose canvas player loses
     // audio, and the remux path has not been tried anywhere else.
-    platforms: { settings: ["apple-mobile", "macos"], player: ["apple-mobile", "macos"] },
+    platforms: { settings: ["macos"], player: ["macos"] },
     reportsBack: true,
   },
   {
@@ -210,6 +210,23 @@ export function externalPlayerOptions(surface: ExternalPlayerSurface) {
     }));
 }
 
+/**
+ * Whether this device should play streams inside the app at all.
+ *
+ * False on iPhone and iPad. Safari cannot open Matroska, so every in-app route
+ * there has to do something the platform will not: decode the file with
+ * WebCodecs, which has no audio decoder on iOS, or remux it and read the bytes
+ * itself, which the host has to permit. Both work sometimes and fail in ways
+ * that look like the app is broken rather than like a container Apple declines
+ * to support. Android's browser opens the container directly and has none of
+ * this, so it keeps the player.
+ *
+ * Offering something that usually fails is worse than not offering it: it puts
+ * the blame in the wrong place. External players open these files without any
+ * of these constraints.
+ */
+export const canPlayInApp = () => playerPlatform() !== "apple-mobile";
+
 export function externalPlayerLabel(mode: ExternalPlayerMode) {
   return (
     externalPlayerOptions("player").find((option) => option.mode === mode)
@@ -218,8 +235,7 @@ export function externalPlayerLabel(mode: ExternalPlayerMode) {
 }
 
 export const isExternalPlayerAvailable = (mode: ExternalPlayerMode) =>
-  mode === "internal" ||
-  mode === "native" ||
+  ((mode === "internal" || mode === "native") && canPlayInApp()) ||
   externalPlayerOptions("settings").some((option) => option.mode === mode);
 
 function m3uFor(url: string, title: string) {

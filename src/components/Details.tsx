@@ -36,6 +36,7 @@ import {
   type MetadataEnrichmentConfig,
 } from "../lib/metadataEnrichment";
 import { platform } from "../platform/index.ts";
+import { canPlayInApp } from "../lib/externalPlayer";
 import {
   applyDebridStreamSettings,
   type DebridRules,
@@ -1581,7 +1582,9 @@ export function Details({
                       onDefaultPlayer(event.target.value as ExternalPlayerMode)
                     }
                   >
-                    <option value="internal">Nuvio web player</option>
+                    {canPlayInApp() && (
+                      <option value="internal">Nuvio web player</option>
+                    )}
                     {platform.externalPlayer.options("player").map((option) => (
                       <option key={option.mode} value={option.mode}>
                         {option.label}

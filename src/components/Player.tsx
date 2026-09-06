@@ -6,6 +6,7 @@ import { startNativePlaybackSession } from "../lib/nativePlaybackSession";
 import { coverNativePlayerSurface, revealNativePlayerSurface } from "../lib/nativePlayerSurface";
 import { platform } from "../platform/index.ts";
 import { t } from "../lib/i18n.ts";
+import { canPlayInApp } from "../lib/externalPlayer";
 import { languageName } from "../lib/languageName.ts";
 import type { ResizeMode, PlayerState } from "../platform/types.ts";
 import { safeHttpUrl } from "../lib/security";
@@ -1124,6 +1125,23 @@ export function Player({
     // Media Source refuses these streams for reasons unrelated to whether the
     // machine can decode them, so the container is skipped entirely: frames go
     // to a canvas and audio to Web Audio.
+    /*
+     * Where this device has no in-app player, nothing gets played in it.
+     *
+     * The pickers stop offering it, but they are not the only way in:
+     * continue-watching and the next episode open playback directly. One
+     * guard here covers every route rather than four that have to agree.
+     *
+     * Downloads are exempt. A file already on the device is a blob, plays
+     * through the video element like any other local file, and none of what
+     * makes streaming unreliable on iOS applies to it.
+     */
+    if (!canPlayInApp() && externalUrl && /^https?:/i.test(externalUrl)) {
+      setWaiting(false);
+      setStatus("");
+      onExternalPlay(mode && mode !== "internal" ? mode : "copy", externalUrl, startPositionMs);
+      return cleanup;
+    }
     const verdict = assessPlayback(url, sourceText);
     /*
      * Chosen from the player menu, or forced with ?nativeMkv=1 for testing.

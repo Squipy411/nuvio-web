@@ -133,6 +133,7 @@ import {
 import {
   canReturnToApp,
   isAndroid,
+  canPlayInApp,
   isAppleMobile,
   isInstalledAppleWebApp,
   isMacOS,
@@ -521,9 +522,13 @@ export function App() {
     const stored = localStorage.getItem(
       "nuvio-web-external-player",
     ) as ExternalPlayerMode | null;
-    return stored && platform.externalPlayer.isAvailable(stored)
-      ? stored
-      : "internal";
+    if (stored && platform.externalPlayer.isAvailable(stored)) return stored;
+    // "internal" is the default everywhere it exists. Where it does not, the
+    // first player this device can actually use is a better start than a
+    // setting that silently means nothing.
+    return canPlayInApp()
+      ? "internal"
+      : (platform.externalPlayer.options("settings")[0]?.mode ?? "copy");
   });
   /**
    * The one thing this app reads from its own address.
@@ -5217,7 +5222,9 @@ function SettingsPage({
               onExternalPlayer(event.target.value as ExternalPlayerMode)
             }
           >
-            <option value="internal">Nuvio web player</option>
+            {canPlayInApp() && (
+              <option value="internal">Nuvio web player</option>
+            )}
             {platform.externalPlayer.options("settings").map((option) => (
               <option key={option.mode} value={option.mode}>
                 {/* Which players can say what happened is the difference
