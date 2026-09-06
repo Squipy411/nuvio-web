@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Check,
   Copy,
+  Dices,
   Download as DownloadIcon,
   Eye,
   EyeOff,
@@ -737,6 +738,12 @@ export function Details({
     if (castRef.current) castRef.current.scrollLeft = 0;
   }, [season, castRef]);
   const [episodeQuery, setEpisodeQuery] = useState("");
+  const [episodeRouletteOpen, setEpisodeRouletteOpen] = useState(false);
+  const seasonEpisodes = useMemo(
+    () =>
+      meta.videos.filter((video) => (video.season ?? 0) === season),
+    [meta.videos, season],
+  );
   const visibleEpisodes = useMemo(() => {
     const query = episodeQuery.trim().toLocaleLowerCase();
     return meta.videos.filter((video) => {
@@ -1297,22 +1304,34 @@ export function Details({
               <span className="eyebrow">EPISODES</span>
               <h2>{meta.name}</h2>
             </div>
-            <label className="season-select-wrap">
-              <span>SEASON</span>
-              <select
-                value={season ?? ""}
-                onChange={(event) => {
-                  setSeason(Number(event.target.value));
-                  setEpisodeQuery("");
-                }}
+            <div className="episode-header-controls">
+              <label className="season-select-wrap">
+                <span>SEASON</span>
+                <select
+                  value={season ?? ""}
+                  onChange={(event) => {
+                    setSeason(Number(event.target.value));
+                    setEpisodeQuery("");
+                  }}
+                >
+                  {seasons.map((value) => (
+                    <option key={value} value={value}>
+                      {value === 0 ? "Specials" : `Season ${value}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                className="episode-random-button"
+                aria-label="Pick a random episode"
+                title="Pick a random episode"
+                disabled={!seasonEpisodes.length}
+                onClick={() => setEpisodeRouletteOpen(true)}
               >
-                {seasons.map((value) => (
-                  <option key={value} value={value}>
-                    {value === 0 ? "Specials" : `Season ${value}`}
-                  </option>
-                ))}
-              </select>
-            </label>
+                <Dices />
+              </button>
+            </div>
           </header>
           <label className="episode-search">
             <Search size={19} />
@@ -1354,6 +1373,17 @@ export function Details({
                 />
               ))}
           </div>
+          {episodeRouletteOpen && seasonEpisodes.length > 0 && (
+            <EpisodeRoulette
+              episodes={seasonEpisodes}
+              season={season ?? 0}
+              onClose={() => setEpisodeRouletteOpen(false)}
+              onPlay={(video) => {
+                setEpisodeRouletteOpen(false);
+                sources(video);
+              }}
+            />
+          )}
         </section>
       )}
       {sectionEnabled("CAST") && castForSeason.length > 0 && (
@@ -1826,6 +1856,185 @@ export function Details({
           </section>
         </div>
       )}
+    </div>
+  );
+}
+
+const EPISODE_REEL_LENGTH = 44;
+const EPISODE_WINNER_AT = 36;
+const EPISODE_ROLL_DEFAULT_MS = 5000;
+
+function makeEpisodeRoll(episodes: Video[]) {
+  const pick = () => episodes[Math.floor(Math.random() * episodes.length)];
+  const winner = pick();
+  const reel = Array.from({ length: EPISODE_REEL_LENGTH }, pick);
+  reel[EPISODE_WINNER_AT] = winner;
+  return { id: Date.now(), reel, winner };
+}
+
+/** The title roulette adapted to the landscape artwork used by episodes. */
+function EpisodeRoulette({
+  episodes,
+  season,
+  onClose,
+  onPlay,
+}: {
+  episodes: Video[];
+  season: number;
+  onClose(): void;
+  onPlay(video: Video): void;
+}) {
+  const [roll, setRoll] = useState(() => makeEpisodeRoll(episodes));
+  const [spinning, setSpinning] = useState(true);
+  const [revealed, setRevealed] = useState(false);
+  const viewport = useRef<HTMLDivElement | null>(null);
+  const track = useRef<HTMLDivElement | null>(null);
+
+  const spin = useCallback(() => {
+    setRevealed(false);
+    setRoll(makeEpisodeRoll(episodes));
+    setSpinning(true);
+  }, [episodes]);
+
+  useEffect(() => {
+    const strip = track.current;
+    const frame = viewport.current;
+    const target = strip?.children.item(EPISODE_WINNER_AT) as HTMLElement | null;
+    if (!strip || !frame || !target) return;
+    const destination =
+      frame.clientWidth / 2 - (target.offsetLeft + target.offsetWidth / 2);
+    const first = strip.children.item(0) as HTMLElement | null;
+    const second = strip.children.item(1) as HTMLElement | null;
+    const pitch = first && second
+      ? second.offsetLeft - first.offsetLeft
+      : target.offsetWidth || 180;
+    const savedDuration = Number(localStorage.getItem("nuvio-web-roulette-ms"));
+    const duration =
+      Number.isFinite(savedDuration) && savedDuration >= 2000 && savedDuration <= 15000
+        ? savedDuration
+        : EPISODE_ROLL_DEFAULT_MS;
+    let frameId = 0;
+    const started = performance.now();
+    const step = (now: number) => {
+      const progress = Math.min((now - started) / duration, 1);
+      const eased = 1 - (1 - progress) ** 4;
+      strip.style.transform = `translate3d(${destination * eased}px, 0, 0)`;
+      if (progress < 1) frameId = window.requestAnimationFrame(step);
+      else setSpinning(false);
+    };
+    frameId = window.requestAnimationFrame(step);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [roll]);
+
+  useEffect(() => {
+    if (spinning) return setRevealed(false);
+    const timer = window.setTimeout(() => setRevealed(true), 320);
+    return () => window.clearTimeout(timer);
+  }, [spinning]);
+
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, [onClose]);
+
+  const code = videoCode(roll.winner) || "Episode";
+  return (
+    <div
+      className="library-roulette-backdrop episode-roulette-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) onClose();
+      }}
+    >
+      <section
+        className={`library-roulette episode-roulette${spinning ? " spinning" : " finished"}`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="episode-roulette-title"
+      >
+        <header>
+          <div>
+            <span>RANDOM EPISODE</span>
+            <h2 id="episode-roulette-title">
+              {season === 0 ? "Specials" : `Season ${season}`}
+            </h2>
+          </div>
+          <button
+            type="button"
+            className="circle-button"
+            aria-label="Close"
+            title="Close"
+            onClick={onClose}
+          >
+            <X />
+          </button>
+        </header>
+        <div className="library-roulette-frame" ref={viewport}>
+          <i className="library-roulette-marker" aria-hidden="true" />
+          <div className="library-roulette-track" ref={track} key={roll.id}>
+            {roll.reel.map((video, position) => (
+              <figure key={`${video.id}:${position}`}>
+                {video.thumbnail ? (
+                  <img src={video.thumbnail} alt="" loading="eager" />
+                ) : (
+                  <div className="library-roulette-placeholder">
+                    {video.episode ?? "?"}
+                  </div>
+                )}
+                <figcaption>
+                  <strong>{videoCode(video) || "Episode"}</strong>
+                  <span>{video.title}</span>
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+          {revealed && (
+            <div className="library-roulette-reveal">
+              <figure>
+                {roll.winner.thumbnail ? (
+                  <img src={roll.winner.thumbnail} alt="" />
+                ) : (
+                  <div className="library-roulette-placeholder">
+                    {roll.winner.episode ?? "?"}
+                  </div>
+                )}
+              </figure>
+              <div>
+                <small>
+                  {code}
+                  {episodeReleaseDate(roll.winner.released)
+                    ? ` · ${episodeReleaseDate(roll.winner.released)}`
+                    : ""}
+                </small>
+                <strong>{roll.winner.title}</strong>
+                {roll.winner.overview && <p>{roll.winner.overview}</p>}
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="library-roulette-result" aria-live="polite">
+          <div>
+            <small>{spinning ? "Choosing from this season…" : code}</small>
+            <strong>{spinning ? "Rolling…" : roll.winner.title}</strong>
+          </div>
+          <div className="library-roulette-actions">
+            <button type="button" className="secondary" disabled={spinning} onClick={spin}>
+              <Dices /> Roll again
+            </button>
+            <button
+              type="button"
+              className="primary"
+              disabled={spinning}
+              onClick={() => onPlay(roll.winner)}
+            >
+              <Play /> Play {code}
+            </button>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }
