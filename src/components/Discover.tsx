@@ -21,10 +21,17 @@ const typeLabel = (value: string) =>
       ? "Series"
       : value.charAt(0).toUpperCase() + value.slice(1);
 
-const searchGroupLabel = (group: AddonSearchGroup) =>
-  group.name.trim().toLowerCase() === "search"
-    ? `${typeLabel(group.type)} search`
-    : group.name;
+/**
+ * One line for a search result row: what the catalog calls itself, the type it
+ * answers for, and how many it found — "Search • Movies | 5".
+ *
+ * The addon's name is deliberately absent. Almost every addon calls its search
+ * catalog "Search", so a heading of the catalog name over a subheading of the
+ * addon, the type and the count said the same two things twice and pushed the
+ * posters down a line for it.
+ */
+const searchGroupHeading = (group: AddonSearchGroup) =>
+  `${group.name.trim() || "Search"} • ${typeLabel(group.type)} | ${group.items.length}`;
 
 /**
  * Browses addon catalogs without a search term, matching the desktop client:
@@ -61,6 +68,12 @@ export function Discover({
   const [error, setError] = useState("");
   const [rolling, setRolling] = useState(false);
   const sentinel = useRef<HTMLDivElement | null>(null);
+
+  /** The catalogs that actually returned something; the rest are not shown. */
+  const foundGroups = useMemo(
+    () => resultGroups.filter((group) => group.items.length > 0),
+    [resultGroups],
+  );
 
   const types = useMemo(
     // Set preserves first-seen order, which is addon priority then manifest
@@ -221,13 +234,17 @@ export function Discover({
     <section className="grid-page">
       <span className="eyebrow">NUVIO WEB</span>
       <h1>{searching ? `Results for “${query}”` : "Discover"}</h1>
-      <p>
-        {searching
-          ? searchPending
-            ? "Searching installed addons…"
-            : `${results.length} titles across ${resultGroups.length} searchable ${resultGroups.length === 1 ? "catalog" : "catalogs"}`
-          : `${catalog?.addonName ?? "No addon"} · browse installed catalogs`}
-      </p>
+      {/* Nothing to count is said once, in the empty state below, rather than
+          as a "0 titles across 0 catalogs" line above it. */}
+      {(!searching || searchPending || foundGroups.length > 0) && (
+        <p>
+          {searching
+            ? searchPending
+              ? "Searching installed addons…"
+              : `${results.length} titles across ${foundGroups.length} ${foundGroups.length === 1 ? "catalog" : "catalogs"}`
+            : `${catalog?.addonName ?? "No addon"} · browse installed catalogs`}
+        </p>
+      )}
 
       {rolling && (
         <TitleRoulette
@@ -276,43 +293,32 @@ export function Discover({
           <span>Searching addon catalogs…</span>
         </div>
       ) : searching ? (
-        resultGroups.length === 0 ? (
-          <div className="empty-state">
-            <strong>Nothing returned</strong>
-            <span>No addon matched that search.</span>
+        /* A catalog that found nothing is not worth a row saying so: most
+           searches ask every installed addon and only a couple answer, and the
+           rest were reading as failures stacked down the page. When none of
+           them answer, that is the one thing worth saying. */
+        foundGroups.length === 0 ? (
+          <div className="empty-state search-empty-state">
+            <strong>No results for “{query}”</strong>
           </div>
         ) : (
           <div className="search-result-groups">
-            {resultGroups.map((group) => (
-              group.items.length > 0 ? (
-                <MediaRow
-                  key={group.key}
-                  section={{
-                    key: group.key,
-                    name: searchGroupLabel(group),
-                    type: group.type,
-                    manifestUrl: "",
-                    addonName: group.addonName,
-                    catalogId: group.key,
-                    items: group.items,
-                  }}
-                  subtitle={`${group.addonName} · ${typeLabel(group.type)} · ${group.items.length}`}
-                  index={index}
-                  onOpen={onOpen}
-                  onMenu={onMenu}
-                />
-              ) : (
-                <section className="search-result-group is-empty" key={group.key}>
-                  <header>
-                    <div>
-                      <h2>{searchGroupLabel(group)}</h2>
-                      <span>{group.addonName} · {typeLabel(group.type)}</span>
-                    </div>
-                    <strong>0</strong>
-                  </header>
-                  <span className="search-group-empty">No matches from this catalog</span>
-                </section>
-              )
+            {foundGroups.map((group) => (
+              <MediaRow
+                key={group.key}
+                section={{
+                  key: group.key,
+                  name: searchGroupHeading(group),
+                  type: group.type,
+                  manifestUrl: "",
+                  addonName: group.addonName,
+                  catalogId: group.key,
+                  items: group.items,
+                }}
+                index={index}
+                onOpen={onOpen}
+                onMenu={onMenu}
+              />
             ))}
           </div>
         )
