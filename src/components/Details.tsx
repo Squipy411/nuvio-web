@@ -1162,7 +1162,11 @@ export function Details({
           meta.background
             ? {
                 "--detail-backdrop": `url("${meta.background.replace(/"/g, "%22")}")`,
-                backgroundImage: `linear-gradient(90deg, rgba(5,7,9,.98), rgba(5,7,9,.38)), linear-gradient(0deg, ${metaScreenSettings.backgroundMode === "dominant_color" ? "rgb(var(--detail-dominant))" : metaScreenSettings.backgroundMode === "cinematic" ? "rgba(8,10,13,.2)" : "#080a0d"}, transparent 60%), url("${meta.background.replace(/"/g, "%22")}")`,
+                "--detail-fade-color": metaScreenSettings.backgroundMode === "dominant_color"
+                  ? "rgb(var(--detail-dominant))"
+                  : metaScreenSettings.backgroundMode === "cinematic"
+                    ? "rgba(8,10,13,.2)"
+                    : "#080a0d",
               } as CSSProperties
             : undefined
         }

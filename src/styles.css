@@ -837,7 +837,7 @@ a {
   position: fixed;
   z-index: 0;
   inset: 0;
-  background-position: center;
+  background-position: top center;
   background-size: cover;
   filter: saturate(0.86);
   pointer-events: none;
@@ -850,7 +850,7 @@ a {
   .detail-view.background-cinematic .detail-page-backdrop {
     display: none;
   }
-  .detail-view.background-cinematic .detail-hero {
+  .detail-view.background-cinematic .detail-hero::before {
     background-image:
       linear-gradient(
         90deg,
@@ -870,8 +870,9 @@ a {
   .detail-view.background-cinematic .detail-sections {
     background: var(--app-bg);
   }
-  .detail-hero {
-    min-height: min(720px, 82vh);
+  .detail-view .detail-hero {
+    --detail-art-height: min(720px, 82vh);
+    min-height: var(--detail-art-height);
     align-items: center;
     padding: 92px 7vw 58px;
   }
@@ -1037,12 +1038,31 @@ a {
   font-weight: 800;
 }
 .detail-hero {
-  min-height: 680px;
-  background-size: cover;
-  background-position: center;
+  --detail-art-height: 680px;
+  position: relative;
+  isolation: isolate;
+  min-height: var(--detail-art-height);
+  background-image: none;
   display: flex;
   align-items: flex-end;
   padding: 100px 7vw 74px;
+}
+.detail-hero::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: var(--detail-art-height);
+  background-image:
+    linear-gradient(90deg, rgba(5,7,9,.98), rgba(5,7,9,.38)),
+    linear-gradient(0deg, var(--detail-fade-color, #080a0d), transparent 60%),
+    var(--detail-backdrop, none);
+  background-position: top center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  pointer-events: none;
 }
 .detail-copy {
   max-width: 780px;
@@ -2752,9 +2772,9 @@ a {
     width: 100%;
   }
   .detail-hero {
-    min-height: 610px;
+    --detail-art-height: 610px;
+    min-height: var(--detail-art-height);
     padding: 105px 20px 42px;
-    background-position: 65% center;
   }
   .detail-copy h1 {
     font-size: 44px;
@@ -6945,13 +6965,16 @@ body.is-locked {
      * percentage stops below mean something — they are positions on the
      * artwork.
      */
-    --detail-art: clamp(620px, 84svh, 880px);
-    min-height: 0;
+    --detail-art-height: clamp(620px, 84svh, 880px);
+    min-height: var(--detail-art-height);
     align-items: flex-start;
     justify-content: flex-start;
     /* Puts the title around 56% down the artwork, which is where the official
        app sits it — over the picture, not after it. */
     padding: clamp(340px, 47svh, 500px) 20px 30px;
+    text-align: center;
+  }
+  .detail-hero::before {
     background-image:
       linear-gradient(
         to bottom,
@@ -6964,8 +6987,7 @@ body.is-locked {
       var(--detail-backdrop) !important;
     background-position: center top;
     background-repeat: no-repeat;
-    background-size: 100% var(--detail-art), auto var(--detail-art);
-    text-align: center;
+    background-size: 100% 100%, auto 100%;
   }
   .detail-copy {
     display: flex;
@@ -7623,7 +7645,8 @@ body.is-locked {
     margin-right: clamp(430px, 31vw, 520px);
   }
   .detail-view.has-episode-panel .detail-hero {
-    min-height: 590px;
+    --detail-art-height: 590px;
+    min-height: var(--detail-art-height);
     align-items: flex-end;
     padding: 100px 5vw 48px;
   }
