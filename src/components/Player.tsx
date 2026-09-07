@@ -16,6 +16,8 @@ import { canPlayInApp } from "../lib/externalPlayer";
 import { languageName } from "../lib/languageName.ts";
 import { loadSubtitles } from "../lib/addons.ts";
 import {
+  activeBrowserSubtitleText,
+  chooseBrowserSubtitle,
   parseBrowserSubtitles,
   type BrowserSubtitleCue,
 } from "../lib/subtitles.ts";
@@ -162,7 +164,7 @@ function storedPlaybackRate() {
 /** How long the picture-mode name stays up after a change. */
 const PICTURE_NOTE_MS = 5000;
 
-type AudioChoice = { id: number; label: string };
+type AudioChoice = { id: number; label: string; lang?: string };
 type NativeAudioTrackList = {
   length: number;
   [index: number]: { enabled: boolean; label?: string; language?: string };
@@ -990,6 +992,7 @@ export function Player({
           .map((track) => ({
             id: track.id,
             label: track.title || languageName(track.lang) || `Audio ${track.id}`,
+            lang: track.lang,
           }));
         setAudioTracks(tracks);
         setSelectedAudio(next.audioTrack);
@@ -1158,6 +1161,7 @@ export function Player({
           list[index].label ||
           languageName(list[index].language) ||
           `Audio ${index + 1}`,
+        lang: list[index].language,
       }));
       setAudioTracks(choices);
       if (!preferredAudioApplied) {
@@ -1538,6 +1542,7 @@ export function Player({
               id: index,
               label:
                 track.name || languageName(track.lang) || `Audio ${index + 1}`,
+              lang: track.lang,
             }));
             setAudioTracks(tracks);
             if (!preferredAudioApplied) {
@@ -1680,20 +1685,36 @@ export function Player({
    * The filter never empties the menu: if nothing matches, everything is shown,
    * because a list of nothing is worse than a long one.
    */
-  const browserSubtitleTracks = useMemo(
-    () =>
-      addonSubtitles.map((track, id) => ({
+  const browserSubtitleTracks = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const track of addonSubtitles) {
+      const key = `${languageName(track.lang).toLowerCase()}\u0000${track.addonName}`;
+      totals.set(key, (totals.get(key) ?? 0) + 1);
+    }
+    const seen = new Map<string, number>();
+    return addonSubtitles.map((track, id) => {
+      const language = languageName(track.lang) || "Unknown";
+      const key = `${language.toLowerCase()}\u0000${track.addonName}`;
+      const occurrence = (seen.get(key) ?? 0) + 1;
+      seen.set(key, occurrence);
+      const variant = (totals.get(key) ?? 0) > 1
+        ? ` · ${occurrence}/${totals.get(key)}`
+        : "";
+      return {
         id,
         lang: track.lang,
-        label: `${languageName(track.lang) || "Unknown"} · ${track.addonName}`,
-      })),
-    [addonSubtitles],
-  );
+        label: `${language} · ${track.addonName}${variant}`,
+      };
+    });
+  }, [addonSubtitles]);
   const offeredSubtitleTracks = nativePlayer
     ? subtitleTracks
     : browserSubtitleTracks;
   const visibleSubtitleTracks = useMemo(() => {
-    if (!settings.subtitleShowOnlyPreferredLanguages)
+    if (
+      !settings.subtitleShowOnlyPreferredLanguages &&
+      settings.addonSubtitleStartupMode !== "PREFERRED_ONLY"
+    )
       return offeredSubtitleTracks;
     const wanted = [
       settings.preferredSubtitleLanguage,
@@ -1711,6 +1732,7 @@ export function Player({
     return matching.length ? matching : offeredSubtitleTracks;
   }, [
     offeredSubtitleTracks,
+    settings.addonSubtitleStartupMode,
     settings.subtitleShowOnlyPreferredLanguages,
     settings.preferredSubtitleLanguage,
     settings.secondaryPreferredSubtitleLanguage,
@@ -1780,33 +1802,40 @@ export function Player({
   const autoSubtitleFor = useRef("");
   useEffect(() => {
     if (nativePlayer || subtitleIndexBusy || !browserSubtitleTracks.length) return;
-    const key = `${meta.type}:${video?.id || meta.id}`;
+    const preferred = settings.preferredSubtitleLanguage.trim().toLowerCase();
+    const selectedAudioLanguage = languageName(
+      audioTracks.find((track) => track.id === selectedAudio)?.lang,
+    ).toLowerCase();
+    const key = [
+      meta.type,
+      video?.id || meta.id,
+      preferred,
+      settings.secondaryPreferredSubtitleLanguage,
+      settings.subtitleUseForcedSubtitles,
+      settings.subtitleUseForcedSubtitles || preferred === "forced"
+        ? selectedAudioLanguage
+        : "",
+    ].join(":");
     if (autoSubtitleFor.current === key) return;
     autoSubtitleFor.current = key;
-    const preferred = settings.preferredSubtitleLanguage;
-    if (!preferred || preferred === "none") return;
-    const requested = [
-      ...(preferred === "device"
-        ? navigator.languages?.length
-          ? [...navigator.languages]
-          : [navigator.language]
-        : [preferred]),
+    // "Off" is authoritative. A stale secondary-language preference must not
+    // silently turn subtitles back on after the primary control says Off.
+    if (!preferred || preferred === "none") {
+      if (selectedSubtitle >= 0) void selectSubtitle(-1);
+      return;
+    }
+    const chosen = chooseBrowserSubtitle(
+      addonSubtitles,
+      preferred,
       settings.secondaryPreferredSubtitleLanguage,
-    ]
-      .map((value) => languageName(value).toLowerCase())
-      .filter(Boolean);
-    const forcedFirst = settings.subtitleUseForcedSubtitles;
-    const candidates = browserSubtitleTracks
-      .map((track, index) => ({ track, index }))
-      .filter(({ track }) =>
-        requested.includes(languageName(track.lang).toLowerCase()),
-      );
-    const chosen =
-      (forcedFirst
-        ? candidates.find(({ track }) => /forced/i.test(track.label))
-        : undefined) ?? candidates[0];
-    if (chosen) void selectSubtitle(chosen.index);
+      navigator.languages?.length ? navigator.languages : [navigator.language],
+      selectedAudioLanguage,
+      settings.subtitleUseForcedSubtitles,
+    );
+    if (chosen >= 0) void selectSubtitle(chosen);
   }, [
+    addonSubtitles,
+    audioTracks,
     browserSubtitleTracks,
     meta.id,
     meta.type,
@@ -1814,6 +1843,7 @@ export function Player({
     settings.preferredSubtitleLanguage,
     settings.secondaryPreferredSubtitleLanguage,
     settings.subtitleUseForcedSubtitles,
+    selectedAudio,
     subtitleIndexBusy,
     video?.id,
   ]);
@@ -1822,10 +1852,7 @@ export function Player({
     () =>
       nativePlayer || selectedSubtitle < 0
         ? ""
-        : browserSubtitleCues
-            .filter((cue) => currentTime >= cue.start && currentTime < cue.end)
-            .map((cue) => cue.text)
-            .join("\n"),
+        : activeBrowserSubtitleText(browserSubtitleCues, currentTime),
     [browserSubtitleCues, currentTime, selectedSubtitle],
   );
 

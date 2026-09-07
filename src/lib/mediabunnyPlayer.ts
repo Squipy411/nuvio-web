@@ -97,7 +97,7 @@ export type MediabunnyPlayerOptions = {
   onAudioTracks?(tracks: AudioTrackChoice[], selected: number): void;
 };
 
-export type AudioTrackChoice = { id: number; label: string };
+export type AudioTrackChoice = { id: number; label: string; lang?: string };
 
 /**
  * Three-letter codes whose two-letter form is not their first two letters.
@@ -692,7 +692,11 @@ export class MediabunnyPlayer {
         // 6 and 8 are the counts anyone recognises by name.
         channels === 6 ? "5.1" : channels === 8 ? "7.1" : channels === 2 ? "Stereo" : "",
       ].filter(Boolean);
-      return [{ id, label: parts.join(" · ") || `Track ${id + 1}` }];
+      return [{
+        id,
+        label: parts.join(" · ") || `Track ${id + 1}`,
+        lang: language,
+      }];
     });
   }
 
@@ -852,9 +856,18 @@ export class MediabunnyPlayer {
     };
     void this.runVideo(generation).catch(failed);
     void this.runAudio(generation).catch(failed);
-    const tick = () => {
+    // The decode and audio clocks run independently of React. Reporting at
+    // display refresh rate only made the entire player tree render 60-120
+    // times a second, which could starve video decoding and make pause taps
+    // feel delayed on slower devices. Ten updates per second keeps the
+    // seekbar and subtitles responsive without competing with the decoder.
+    let lastReportAt = -Infinity;
+    const tick = (now: number) => {
       if (this.generation !== generation || this.stopped) return;
-      this.options.onTime?.(this.currentTime, this.duration);
+      if (now - lastReportAt >= 100) {
+        lastReportAt = now;
+        this.options.onTime?.(this.currentTime, this.duration);
+      }
       if (this.duration && this.currentTime >= this.duration) {
         this.playing = false;
         this.silence();
