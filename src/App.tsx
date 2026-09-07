@@ -5095,15 +5095,11 @@ function SettingsPage({
             disabled={!settingsReady}
             onCommit={(cornerRadiusDp) => onPosterSetting({ cornerRadiusDp })}
           />
-        </div>
-        <div className="setting-grid-footer">
-          <small>
-            Scales the card from {POSTER_DEFAULTS.widthDp} ×{" "}
-            {POSTER_DEFAULTS.heightDp}, so posters keep their shape.
-          </small>
+          {/* In the row with the numbers it undoes, bottom-aligned with the
+              boxes rather than with the labels above them. */}
           <button
             type="button"
-            className="secondary"
+            className="secondary poster-size-reset"
             disabled={!settingsReady}
             onClick={() =>
               onPosterSetting({
@@ -5116,6 +5112,10 @@ function SettingsPage({
             <RotateCcw size={15} /> Reset
           </button>
         </div>
+        <small className="setting-grid-note">
+          Scales every poster in the app from {POSTER_DEFAULTS.widthDp} ×{" "}
+          {POSTER_DEFAULTS.heightDp}, so they keep their shape.
+        </small>
         <SettingToggle
           title={t("toggle.landscapeCards.title")}
           description={t("toggle.landscapeCards.body")}

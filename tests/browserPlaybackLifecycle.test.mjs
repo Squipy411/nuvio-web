@@ -139,6 +139,34 @@ test('the player can swap release without going back to the sheet', () => {
   assert.match(details, /closeSource\(\);\s*\n\s*onPlay\(stream, meta, video, player\)/);
 });
 
+test('one cog holds the settings, and none of them explain themselves', () => {
+  const component = readFileSync(
+    new URL("../src/components/Player.tsx", import.meta.url),
+    "utf8",
+  );
+
+  // One panel with pages, not a button per setting along the control bar.
+  assert.match(component, /const \[settingsPage, setSettingsPage\]/);
+  for (const page of ["root", "captions", "audio", "speed"])
+    assert.match(component, new RegExp(`settingsPage === "${page}"`));
+  assert.doesNotMatch(component, /playbackMenuOpen|subsOpen|audioOpen/);
+  // Speed left the control bar for a list inside the cog.
+  assert.doesNotMatch(component, /player-rate-button/);
+  assert.match(component, /className="settings-back"/);
+
+  // No paragraph under a switch in a menu over a running picture.
+  assert.doesNotMatch(component, /Reduce sudden loud and quiet changes/);
+  assert.doesNotMatch(component, /Turn off to limit HDR brightness/);
+  assert.doesNotMatch(component, /Dolby Vision-only source/);
+  assert.doesNotMatch(component, /Open externally/);
+
+  // Volume rides with the transport controls on the left.
+  const left = /className="player-control-group">[\s\S]*?<\/div>\s*\n\s*<div className="player-control-group player-control-right">/.exec(component);
+  assert.ok(left, "no left control group found");
+  assert.match(left[0], /className="volume-slider"/);
+  assert.match(left[0], /muted \? "Unmute" : "Mute"/);
+});
+
 test('a new source gets new elements, and its resume point is used once', () => {
   const component = readFileSync(
     new URL("../src/components/Player.tsx", import.meta.url),

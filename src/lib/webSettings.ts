@@ -29,8 +29,8 @@ export type PosterSettings = {
 };
 
 export const POSTER_DEFAULTS: PosterSettings = {
-  widthDp: 126,
-  heightDp: 189,
+  widthDp: 140,
+  heightDp: 210,
   cornerRadiusDp: 12,
   catalogLandscapeModeEnabled: false,
   hideLabelsEnabled: false,
@@ -48,12 +48,12 @@ export const POSTER_DEFAULTS: PosterSettings = {
  * nobody meant to choose.
  *
  * The range is what the stored width accepts — 88 to 260 against a default of
- * 126, so 70% to 206% — floored at the tighter end and capped at a round 200.
+ * 140, so 63% to 185% — floored at the tighter end and capped at a round 185.
  * Height follows from the same percentage and is inside its own 112–390 by
  * construction, since it is the looser of the two bounds.
  */
-export const POSTER_SCALE_MIN = 70;
-export const POSTER_SCALE_MAX = 200;
+export const POSTER_SCALE_MIN = 65;
+export const POSTER_SCALE_MAX = 185;
 
 export const posterScale = (poster: Pick<PosterSettings, "widthDp">) =>
   Math.min(

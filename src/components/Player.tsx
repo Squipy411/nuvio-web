@@ -30,6 +30,8 @@ import {
 } from "../lib/webSettings";
 import {
   ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   Eye,
   Info,
@@ -37,10 +39,9 @@ import {
   FastForward,
   List,
   LoaderCircle,
-  Captions,
   Maximize,
-  Music2,
   Play,
+  Settings,
   SkipForward,
   Volume2,
   VolumeX,
@@ -365,9 +366,17 @@ export function Player({
     [],
   );
   const [controlsVisible, setControlsVisible] = useState(true);
-  const [audioOpen, setAudioOpen] = useState(false);
-  const [subsOpen, setSubsOpen] = useState(false);
-  const [playbackMenuOpen, setPlaybackMenuOpen] = useState(false);
+  /**
+   * One menu behind one cog, rather than a button per setting along the bar.
+   *
+   * `null` is closed. Everything else is which page of it is showing: a list
+   * of settings, or the one a settings row opened. The pages share a panel and
+   * replace each other in it, so a track list is read where the setting that
+   * asked for it was, and the way back is the heading above it.
+   */
+  const [settingsPage, setSettingsPage] = useState<
+    null | "root" | "captions" | "audio" | "speed"
+  >(null);
   /**
    * How long polled audio state is disregarded after a local change.
    *
@@ -608,11 +617,9 @@ export function Player({
         : videoRef.current && !videoRef.current.paused;
     if (running)
       hideTimer.current = window.setTimeout(() => {
-        setAudioOpen(false);
-        setSubsOpen(false);
+        setSettingsPage(null);
         setExternalPlayerOpen(false);
         setSourcesOpen(false);
-        setPlaybackMenuOpen(false);
         setControlsVisible(false);
       }, 3000);
   }, []);
@@ -1653,9 +1660,26 @@ export function Player({
     settings.secondaryPreferredSubtitleLanguage,
   ]);
 
+  /**
+   * Only where a track can actually be chosen.
+   *
+   * The browser route applies a preferred subtitle to the video element's own
+   * text tracks and offers no picker, so a Captions row there would open a
+   * page with nothing on it but "Off".
+   */
+  const canPickSubtitles = !!nativePlayer;
+  /** What the settings list shows beside each row, YouTube-fashion. */
+  const selectedSubtitleLabel =
+    subtitleTracks.find((track) => track.id === selectedSubtitle)?.label ??
+    t("player.off");
+  const selectedAudioLabel =
+    audioTracks.find((track) => track.id === selectedAudio)?.label ??
+    audioTracks[0]?.label ??
+    "Default";
+
   const selectSubtitle = (id: number) => {
     setSelectedSubtitle(id);
-    setSubsOpen(false);
+    setSettingsPage(null);
     void nativePlayer?.setSubtitleTrack(id).catch((reason: unknown) =>
       setError(
         reason instanceof Error ? reason.message : "Could not select subtitles.",
@@ -1666,7 +1690,7 @@ export function Player({
   const selectAudio = (id: number) => {
     if (nativePlayer) {
       setSelectedAudio(id);
-      setAudioOpen(false);
+      setSettingsPage(null);
       void nativePlayer.setAudioTrack(id).catch((reason: unknown) =>
         setError(reason instanceof Error ? reason.message : "Could not select audio."),
       );
@@ -1675,7 +1699,7 @@ export function Player({
     if (engineRef.current) {
       void engineRef.current.selectAudioTrack(id);
       setSelectedAudio(id);
-      setAudioOpen(false);
+      setSettingsPage(null);
       return;
     }
     if (hlsRef.current) hlsRef.current.audioTrack = id;
@@ -1689,7 +1713,7 @@ export function Player({
           list[index].enabled = index === id;
     }
     setSelectedAudio(id);
-    setAudioOpen(false);
+    setSettingsPage(null);
   };
   const openExternalPlayer = (mode: ExternalPlayerMode) => {
     if (!externalUrl) return;
@@ -2087,8 +2111,6 @@ export function Player({
                 <SkipForward />
               </button>
             )}
-          </div>
-          <div className="player-control-group player-control-right">
             <button
               aria-label={muted ? "Unmute" : "Mute"}
               onClick={() => toggleMuted()}
@@ -2110,48 +2132,70 @@ export function Player({
                 } as CSSProperties
               }
             />
-            {!nativePlayer && (
-              <div className="audio-picker">
-                <button
-                  className={`player-rate-button${playbackMenuOpen ? " active" : ""}`}
-                  aria-label={`Playback settings, speed ${formatPlaybackRate(playbackRate)}`}
-                  aria-expanded={playbackMenuOpen}
-                  onClick={() => {
-                    setAudioOpen(false);
-                    setSubsOpen(false);
-                    setExternalPlayerOpen(false);
-                    setSourcesOpen(false);
-                    setPlaybackMenuOpen((value) => !value);
-                  }}
-                >
-                  {formatPlaybackRate(playbackRate)}
-                </button>
-                {playbackMenuOpen && (
-                  <div className="audio-menu playback-options-menu">
-                    <strong>Playback speed</strong>
-                    <div className="playback-rate-grid">
-                      {PLAYBACK_RATES.map((rate) => (
-                        <button
-                          key={rate}
-                          className={playbackRate === rate ? "selected" : ""}
-                          onClick={() => {
-                            setPlaybackRate(rate);
-                            setPlaybackMenuOpen(false);
-                          }}
-                        >
-                          {formatPlaybackRate(rate)}
-                        </button>
-                      ))}
-                    </div>
-                    <label className="playback-option-row">
-                      <span>
-                        <strong>Stable Volume</strong>
-                        <small>
-                          {decoding
-                            ? "Reduce sudden loud and quiet changes."
-                            : "Available for Nuvio-decoded streams."}
-                        </small>
-                      </span>
+          </div>
+          <div className="player-control-group player-control-right">
+            {/* One cog for everything that is a setting rather than an
+                action, laid out as a list you step into and back out of. It
+                was a button per setting along this bar, which does not grow:
+                every new option was another glyph to recognise. */}
+            <div className="audio-picker">
+              <button
+                aria-label={t("player.settings")}
+                title={t("player.settings")}
+                className={settingsPage ? "active" : ""}
+                aria-expanded={settingsPage !== null}
+                onClick={() => {
+                  setExternalPlayerOpen(false);
+                  setSourcesOpen(false);
+                  setEpisodesOpen(false);
+                  setSettingsPage((page) => (page ? null : "root"));
+                }}
+              >
+                <Settings />
+              </button>
+              {settingsPage === "root" && (
+                <div className="audio-menu settings-menu">
+                  {canPickSubtitles && (
+                    <button
+                      className="settings-row"
+                      onClick={() => setSettingsPage("captions")}
+                    >
+                      <span>{t("player.subtitles")}</span>
+                      <em>
+                        {selectedSubtitleLabel}
+                        <ChevronRight />
+                      </em>
+                    </button>
+                  )}
+                  <button
+                    className="settings-row"
+                    onClick={() => setSettingsPage("audio")}
+                  >
+                    <span>{t("player.audioTrack")}</span>
+                    <em>
+                      {selectedAudioLabel}
+                      <ChevronRight />
+                    </em>
+                  </button>
+                  {!nativePlayer && (
+                    <button
+                      className="settings-row"
+                      onClick={() => setSettingsPage("speed")}
+                    >
+                      <span>{t("player.playbackSpeed")}</span>
+                      <em>
+                        {formatPlaybackRate(playbackRate)}
+                        <ChevronRight />
+                      </em>
+                    </button>
+                  )}
+                  {/* Switches, so they settle here rather than opening a page
+                      of two words. No explanation under either: a setting that
+                      needs a paragraph in a menu over a running picture is one
+                      nobody reads while watching. */}
+                  {!nativePlayer && (
+                    <label className="settings-row settings-switch">
+                      <span>Stable Volume</span>
                       <input
                         type="checkbox"
                         checked={stableVolume}
@@ -2159,15 +2203,10 @@ export function Player({
                         onChange={(event) => setStableVolume(event.target.checked)}
                       />
                     </label>
-                    <label className="playback-option-row">
-                      <span>
-                        <strong>HDR output</strong>
-                        <small>
-                          {hdrControlSupported
-                            ? "Turn off to limit HDR brightness to SDR."
-                            : "This browser controls HDR automatically."}
-                        </small>
-                      </span>
+                  )}
+                  {!nativePlayer && (
+                    <label className="settings-row settings-switch">
+                      <span>HDR output</span>
                       <input
                         type="checkbox"
                         checked={hdrEnabled}
@@ -2175,76 +2214,50 @@ export function Player({
                         onChange={(event) => setHdrEnabled(event.target.checked)}
                       />
                     </label>
-                    <small className="playback-options-note">
-                      HDR output cannot repair a Dolby Vision-only source with
-                      missing fallback color data.
-                    </small>
-                  </div>
-                )}
-              </div>
-            )}
-            {nativePlayer && (
-              <div className="audio-picker">
-                <button
-                  aria-label={t("player.subtitles")}
-                  className={subsOpen ? "active" : ""}
-                  aria-expanded={subsOpen}
-                  onClick={() => {
-                    setPlaybackMenuOpen(false);
-                    setExternalPlayerOpen(false);
-                    setSourcesOpen(false);
-                    setAudioOpen(false);
-                    setSubsOpen((value) => !value);
-                  }}
-                >
-                  <Captions />
-                </button>
-                {subsOpen && (
-                  <div className="audio-menu subtitle-menu">
+                  )}
+                </div>
+              )}
+              {settingsPage === "captions" && (
+                <div className="audio-menu settings-menu subtitle-menu">
+                  <button
+                    className="settings-back"
+                    onClick={() => setSettingsPage("root")}
+                  >
+                    <ChevronLeft />
                     <strong>{t("player.subtitles")}</strong>
-                    {/* Always offered, even with no tracks: turning subtitles
-                        off is the thing most often wanted here, and it has to
-                        be reachable whatever the file contains. */}
+                  </button>
+                  {/* Always offered, even with no tracks: turning subtitles
+                      off is the thing most often wanted here, and it has to be
+                      reachable whatever the file contains. */}
+                  <button
+                    className={selectedSubtitle < 0 ? "selected" : ""}
+                    onClick={() => selectSubtitle(-1)}
+                  >
+                    {t("player.off")}
+                  </button>
+                  {visibleSubtitleTracks.map((track) => (
                     <button
-                      className={selectedSubtitle < 0 ? "selected" : ""}
-                      onClick={() => selectSubtitle(-1)}
+                      key={track.id}
+                      className={selectedSubtitle === track.id ? "selected" : ""}
+                      onClick={() => selectSubtitle(track.id)}
                     >
-                      {t("player.off")}
+                      {track.label}
                     </button>
-                    {visibleSubtitleTracks.map((track) => (
-                      <button
-                        key={track.id}
-                        className={selectedSubtitle === track.id ? "selected" : ""}
-                        onClick={() => selectSubtitle(track.id)}
-                      >
-                        {track.label}
-                      </button>
-                    ))}
-                    {!subtitleTracks.length && (
-                      <p>This source carries no subtitle tracks.</p>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
-            <div className="audio-picker">
-              <button
-                aria-label={t("player.audioTrack")}
-                className={audioOpen ? "active" : ""}
-                aria-expanded={audioOpen}
-                onClick={() => {
-                  setPlaybackMenuOpen(false);
-                  setExternalPlayerOpen(false);
-                  setSourcesOpen(false);
-                  setSubsOpen(false);
-                  setAudioOpen((value) => !value);
-                }}
-              >
-                <Music2 />
-              </button>
-              {audioOpen && (
-                <div className="audio-menu">
-                  <strong>{t("player.audioTrack")}</strong>
+                  ))}
+                  {!subtitleTracks.length && (
+                    <p>This source carries no subtitle tracks.</p>
+                  )}
+                </div>
+              )}
+              {settingsPage === "audio" && (
+                <div className="audio-menu settings-menu subtitle-menu">
+                  <button
+                    className="settings-back"
+                    onClick={() => setSettingsPage("root")}
+                  >
+                    <ChevronLeft />
+                    <strong>{t("player.audioTrack")}</strong>
+                  </button>
                   {audioTracks.length ? (
                     audioTracks.map((track) => (
                       <button
@@ -2267,6 +2280,29 @@ export function Player({
                   )}
                 </div>
               )}
+              {settingsPage === "speed" && (
+                <div className="audio-menu settings-menu subtitle-menu">
+                  <button
+                    className="settings-back"
+                    onClick={() => setSettingsPage("root")}
+                  >
+                    <ChevronLeft />
+                    <strong>{t("player.playbackSpeed")}</strong>
+                  </button>
+                  {PLAYBACK_RATES.map((rate) => (
+                    <button
+                      key={rate}
+                      className={playbackRate === rate ? "selected" : ""}
+                      onClick={() => {
+                        setPlaybackRate(rate);
+                        setSettingsPage(null);
+                      }}
+                    >
+                      {formatPlaybackRate(rate)}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
             {!nativePlayer && externalUrl && !!handoffOptions().length && (
               <div className="external-player-picker">
@@ -2275,8 +2311,7 @@ export function Player({
                   aria-label="Open in external player"
                   aria-expanded={externalPlayerOpen}
                   onClick={() => {
-                    setPlaybackMenuOpen(false);
-                    setAudioOpen(false);
+                    setSettingsPage(null);
                     setSourcesOpen(false);
                     setExternalPlayerOpen((value) => !value);
                   }}
@@ -2307,9 +2342,7 @@ export function Player({
                 className={sourcesOpen ? "active" : ""}
                 aria-expanded={sourcesOpen}
                 onClick={() => {
-                  setPlaybackMenuOpen(false);
-                  setAudioOpen(false);
-                  setSubsOpen(false);
+                  setSettingsPage(null);
                   setExternalPlayerOpen(false);
                   setEpisodesOpen(false);
                   // Asked for on the first look rather than with every
@@ -2327,8 +2360,7 @@ export function Player({
                 className={episodesOpen ? "active" : ""}
                 aria-expanded={episodesOpen}
                 onClick={() => {
-                  setPlaybackMenuOpen(false);
-                  setAudioOpen(false);
+                  setSettingsPage(null);
                   setExternalPlayerOpen(false);
                   setSourcesOpen(false);
                   setEpisodesOpen((value) => !value);

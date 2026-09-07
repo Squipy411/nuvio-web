@@ -51,6 +51,21 @@ test("a width from another client is reported as the nearest size it can offer",
   assert.equal(posterScale({ widthDp: 4000 }), POSTER_SCALE_MAX);
 });
 
+test("the stylesheet's fallback card is the same as the default", () => {
+  // App writes the stored size over these once the settings blob lands. If
+  // they disagree, every load resizes the cards once, visibly.
+  const css = readFileSync(
+    fileURLToPath(new URL("../src/styles.css", import.meta.url)),
+    "utf8",
+  );
+  assert.match(css, new RegExp(`--poster-width: ${POSTER_DEFAULTS.widthDp}px`));
+  assert.match(css, new RegExp(`--poster-height: ${POSTER_DEFAULTS.heightDp}px`));
+  assert.match(
+    css,
+    new RegExp(`--poster-aspect: ${POSTER_DEFAULTS.widthDp} / ${POSTER_DEFAULTS.heightDp}`),
+  );
+});
+
 test("the number fields hold what is typed rather than clamping each keystroke", () => {
   const app = readFileSync(
     fileURLToPath(new URL("../src/App.tsx", import.meta.url)),

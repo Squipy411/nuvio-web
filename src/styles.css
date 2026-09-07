@@ -3485,65 +3485,94 @@ html.native-player-active.native-player-covered .player-view.native-player {
 .audio-menu a svg {
   width: 17px;
 }
-.player-control-group .player-rate-button {
-  min-width: 50px;
-  padding-inline: 8px;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
+/* ---- The settings cog -------------------------------------------------- */
+/* A list you step into and back out of, in one panel, rather than a button
+   per setting along the control bar. */
+.settings-menu {
+  width: min(340px, calc(100vw - 30px));
+  max-height: min(64vh, 440px);
+  overflow-y: auto;
+  overscroll-behavior: none;
+  scrollbar-width: thin;
+  gap: 2px;
 }
-.playback-options-menu {
-  width: min(370px, calc(100vw - 30px));
-  gap: 11px;
-}
-.playback-rate-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 6px;
-}
-.player-control-group .playback-rate-grid button {
-  min-width: 0;
-  width: 100%;
-  height: 36px;
-  padding: 0 5px;
-  border-radius: 9px;
-  border: 1px solid var(--episodes-field-line);
-  background: var(--episodes-field);
-  font-weight: 700;
-}
-.player-control-group .playback-rate-grid button:hover {
-  background: var(--episodes-hover);
-}
-.player-control-group .playback-rate-grid button.selected {
-  border-color: transparent;
-  background: var(--accent-gradient, var(--accent));
-  color: var(--accent-ink);
-}
-.playback-option-row {
+/* Name on the left, what it is set to on the right — so the list answers what
+   everything is without opening anything. */
+.player-control-group .settings-menu > .settings-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  min-height: 54px;
-  padding: 9px 7px;
-  border-top: 1px solid #ffffff12;
+  gap: 14px;
+  width: 100%;
+  min-height: 44px;
+  height: auto;
+  padding: 8px 10px;
+  border-radius: 9px;
+  text-align: left;
   cursor: pointer;
 }
-.playback-option-row > span {
-  display: grid;
-  gap: 3px;
+.settings-menu > .settings-row > span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.playback-option-row > span > strong {
-  font-size: 14px;
+.settings-menu > .settings-row > em {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: #97a1ac;
+  font-size: 12px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.audio-menu .playback-option-row small,
-.audio-menu .playback-options-note {
-  margin: 0;
+.settings-menu > .settings-row > em svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
 }
-.playback-option-row input {
+.player-control-group .settings-menu > .settings-row:hover {
+  background: var(--episodes-hover);
+}
+/* The heading of a page, and the way back out of it. */
+.player-control-group .settings-menu > .settings-back {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  min-height: 40px;
+  height: auto;
+  margin-bottom: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--episodes-field-line);
+  border-radius: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.settings-menu > .settings-back svg {
+  flex: none;
+  width: 17px;
+  height: 17px;
+}
+.settings-menu > .settings-back strong {
+  font-size: 13px;
+}
+.player-control-group .settings-menu > .settings-back:hover {
+  background: none;
+  color: var(--accent);
+}
+/* The app's own switch shape, at the size the rest of the player uses. */
+.settings-switch input {
   appearance: none;
   flex: 0 0 auto;
-  width: 42px;
-  height: 24px;
+  width: 40px;
+  height: 23px;
   margin: 0;
   border: 1px solid var(--episodes-field-line);
   border-radius: 999px;
@@ -3551,25 +3580,28 @@ html.native-player-active.native-player-covered .player-view.native-player {
   cursor: pointer;
   transition: background 0.15s ease;
 }
-.playback-option-row input::after {
+.settings-switch input::after {
   content: "";
   display: block;
-  width: 18px;
-  height: 18px;
+  width: 17px;
+  height: 17px;
   margin: 2px;
   border-radius: 50%;
   background: #fff;
   transition: transform 0.15s ease;
 }
-.playback-option-row input:checked {
+.settings-switch input:checked {
   background: var(--accent-gradient, var(--accent));
 }
-.playback-option-row input:checked::after {
-  transform: translateX(18px);
+.settings-switch input:checked::after {
+  transform: translateX(17px);
 }
-.playback-option-row input:disabled {
+.settings-switch input:disabled {
   opacity: 0.42;
   cursor: not-allowed;
+}
+.settings-switch:has(input:disabled) > span {
+  opacity: 0.5;
 }
 .controls-hidden {
   cursor: none;
@@ -3633,11 +3665,6 @@ html.native-player-active.native-player-covered .player-view.native-player {
   .player-control-group .player-play {
     width: 44px;
     height: 44px;
-  }
-  .player-control-group .player-rate-button {
-    min-width: 42px;
-    padding-inline: 4px;
-    font-size: 12px;
   }
   .volume-slider {
     display: none;
@@ -6180,9 +6207,12 @@ body.is-locked {
   /* White, and the default. Nuvio's own value, from ThemeColors.kt. */
   --accent: #f5f5f5;
   --accent-ink: #111111;
-  --poster-width: 126px;
-  --poster-height: 189px;
-  --poster-aspect: 126 / 189;
+  /* The fallback until the settings blob lands and App writes the stored
+     size over these. Kept in step with POSTER_DEFAULTS, or the cards resize
+     once on every load. */
+  --poster-width: 140px;
+  --poster-height: 210px;
+  --poster-aspect: 140 / 210;
   --poster-radius: 12px;
 }
 :root[data-nuvio-accent="gold"] { --accent: #ffd45c; --accent-ink: #111111; --accent-gradient: linear-gradient(145deg, #8a5700, #e8a91c, #fff1a8, #ffd45c, #9a6200); }
@@ -6251,32 +6281,22 @@ body.is-locked {
   border: 1px solid var(--panel-border);
   border-radius: 10px;
 }
-/* What the numbers above mean, and the way back to the defaults, on one line
-   under them. */
-.setting-grid-footer {
-  display: flex;
+/* In the row with the numbers it undoes. The cells are label-over-box, so it
+   sits at the bottom of its own and takes the box's height. */
+.poster-size-reset {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding-top: 12px;
+  justify-content: center;
+  gap: 7px;
+  align-self: end;
+  min-height: 42px;
 }
-.setting-grid-footer small {
+.setting-grid-note {
+  display: block;
+  padding-top: 12px;
   color: #87919b;
   font-size: 12px;
   line-height: 1.45;
-}
-.setting-grid-footer button {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  flex: 0 0 auto;
-}
-@media (max-width: 560px) {
-  .setting-grid-footer {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 10px;
-  }
 }
 .setting-text-row {
   grid-template-columns: minmax(0, 1fr) minmax(220px, 38%);
