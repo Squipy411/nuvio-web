@@ -3,6 +3,7 @@
 import { describeTransfer, probeSource, statusReason } from "./sourceProbe.ts";
 import { probeDecoders, summariseDecoders } from "./decoderSupport.ts";
 import { readRetryDelay } from "./requestPolicy.ts";
+import { languageName } from "./languageName.ts";
 import { isAppleWebKit } from "./playback.ts";
 
 /**
@@ -683,7 +684,10 @@ export class MediabunnyPlayer {
       const channels = this.audioChannels[id];
       const parts = [
         track.name?.trim(),
-        language && language !== "und" ? language.toUpperCase() : "",
+        // Spelled out, the way every other language in the app is: a menu
+        // reading "EN · AAC · Stereo" makes you translate the code yourself,
+        // and the same file's subtitles were already saying "English".
+        language && language !== "und" ? languageName(language) : "",
         this.audioCodecs[id]?.toUpperCase() ?? "",
         // 6 and 8 are the counts anyone recognises by name.
         channels === 6 ? "5.1" : channels === 8 ? "7.1" : channels === 2 ? "Stereo" : "",

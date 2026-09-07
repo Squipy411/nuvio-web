@@ -72,9 +72,11 @@ test('the centre of the picture is a play hint, not a pause indicator', () => {
   const centre = /className="player-center"[\s\S]*?<\/button>/.exec(component);
   assert.ok(centre, "no centre button found");
   assert.doesNotMatch(centre[0], /SolidPause/);
-  // The glyph alone in the accent, not a white one on a filled disc.
+  // The accent glyph on an opaque disc, not a white one.
   assert.match(styles, /\.player-center \{[^}]*color: var\(--accent\)/);
-  assert.doesNotMatch(styles, /\.player-center \{[^}]*background: #/);
+  assert.match(styles, /\.player-center \{[^}]*background: #000;/);
+  // The loading spinner shares the class and must not take the disc.
+  assert.match(styles, /\.player-center-busy \{[^}]*background: none/);
 });
 
 test('the player borrows the episodes panel palette rather than a second one', () => {
@@ -120,9 +122,13 @@ test('the player can swap release without going back to the sheet', () => {
 
   // The list is asked for on the first look, not with every stream.
   assert.match(component, /if \(!sourcesOpen && !sources\?\.length\) onRequestSources\?\.\(\)/);
-  // What is playing is named, and its own row cannot be chosen again.
+  // What is playing is marked in the list, and its own row cannot be chosen
+  // again. A panel in the middle of the picture, with the sheet's own rows —
+  // release names run long and carry badges, which a corner menu cannot hold.
   assert.match(component, /sourceKey\(item\) === sourceKey\(stream\)/);
-  assert.match(component, /source-menu-current/);
+  assert.match(component, /current \? "is-playing" : undefined/);
+  assert.match(component, /className="player-sources"/);
+  assert.match(component, /<SourceBadges stream=\{item\} settings=\{streamBadgeSettings\} \/>/);
   // The position goes with the swap, so it resumes rather than restarts.
   assert.match(component, /onSelectSource\?\.\(next, Math\.max\(0, Math\.round\(currentTimeRef\.current \* 1000\)\)\)/);
   assert.match(app, /resumeMs: positionMs/);
@@ -131,6 +137,27 @@ test('the player can swap release without going back to the sheet', () => {
   // And leaving playback lands on the page you came from: the sheet closes
   // when a source is chosen rather than waiting behind the player.
   assert.match(details, /closeSource\(\);\s*\n\s*onPlay\(stream, meta, video, player\)/);
+});
+
+test('a new source gets new elements, and its resume point is used once', () => {
+  const component = readFileSync(
+    new URL("../src/components/Player.tsx", import.meta.url),
+    "utf8",
+  );
+
+  // The load effect's teardown and setup run back to back in one commit, so
+  // without this the next source is built on the element the last one left.
+  assert.match(component, /<video\s*\n\s*key=\{url\}/);
+  assert.match(component, /<canvas\s*\n\s*key=\{url\}/);
+  // The seek is armed once per source, not once per run of an effect that
+  // also re-runs on language settings and a refused route.
+  assert.match(component, /resumedFor\.current === url/);
+  assert.match(component, /resumedFor\.current = url/);
+  // A source with no browser URL must not leave the player stuck mid-switch,
+  // which disables the very control that would let you pick another.
+  const guard = /if \(!element \|\| !url\) \{[\s\S]*?\n    \}/.exec(component);
+  assert.ok(guard, "no missing-url guard found");
+  assert.match(guard[0], /setSwitching\(false\)/);
 });
 
 test('the experimental Movi player is no longer shipped or selectable', () => {

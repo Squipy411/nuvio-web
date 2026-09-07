@@ -11,3 +11,20 @@ export function SolidPause() {
     <rect x="14" y="3" width="5" height="18" rx="1.5" />
   </svg>;
 }
+
+/**
+ * lucide's `square-arrow-right-enter`, drawn here rather than imported.
+ *
+ * It arrived in lucide 1.x and this app is on 0.468; pulling a major version
+ * of the icon set through for one glyph would restyle every other icon in the
+ * app. The paths are lucide's own (ISC), at lucide's stroke settings, so it
+ * sits beside the imported ones without looking hand-drawn.
+ */
+export function SourceSwapIcon() {
+  return <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+    strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
+    <path d="m10 16 4-4-4-4" />
+    <path d="M3 12h11" />
+    <path d="M3 8V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3" />
+  </svg>;
+}

@@ -33,7 +33,15 @@ test("WebKit and Firefox seek/volume tracks, thumbs and primary controls use the
 test("both player locations use solid playback glyphs, not outline icons", () => {
   const player = readFileSync(new URL("../src/components/Player.tsx", import.meta.url), "utf8");
   const icons = readFileSync(new URL("../src/components/PlaybackIcons.tsx", import.meta.url), "utf8");
-  assert.equal((player.match(/<SolidPlay \/>/g) ?? []).length, 2);
-  assert.match(player, /playing \? <SolidPause \/> : <SolidPlay \/>/);
+  // Named rather than counted: outline glyphs belong elsewhere in the player
+  // — a source row's fallback badge is the sheet's own outline Play — and a
+  // total would break every time one of those is added.
+  const centre = /className="player-center"[\s\S]*?<\/button>/.exec(player);
+  assert.ok(centre, "no centre button found");
+  assert.match(centre[0], /<SolidPlay \/>/);
+  assert.match(
+    player,
+    /className="player-play"[\s\S]*?playing \? <SolidPause \/> : <SolidPlay \/>/,
+  );
   assert.equal((icons.match(/fill="currentColor" stroke="none"/g) ?? []).length, 2);
 });

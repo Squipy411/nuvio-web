@@ -2646,6 +2646,7 @@ export function App() {
           episodes={playback.meta.videos}
           watchIndex={watchIndex}
           sources={playerSources}
+          streamBadgeSettings={webSettings.streamBadges}
           sourcesBusy={playerSourcesBusy}
           onRequestSources={loadPlayerSources}
           onSelectSource={(next, positionMs) => {

@@ -1,5 +1,5 @@
 import type Hls from "hls.js";
-import { SolidPause, SolidPlay } from "./PlaybackIcons";
+import { SolidPause, SolidPlay, SourceSwapIcon } from "./PlaybackIcons";
 import { automaticSkipSegment, nextEpisodeDue, shouldBlurEpisode } from "../lib/playbackPolicy";
 import { nativePlayerPreferences } from "../lib/nativePlayerPreferences";
 import { startNativePlaybackSession } from "../lib/nativePlaybackSession";
@@ -25,6 +25,7 @@ import { MediabunnyPlayer } from "../lib/mediabunnyPlayer";
 import { NativeMkvPlayer } from "../lib/nativeMkvPlayer";
 import {
   browserColor,
+  type StreamBadgeSettings,
   type WebPlayerSettings,
 } from "../lib/webSettings";
 import {
@@ -34,12 +35,12 @@ import {
   Info,
   ExternalLink,
   FastForward,
-  Layers,
   List,
   LoaderCircle,
   Captions,
   Maximize,
   Music2,
+  Play,
   SkipForward,
   Volume2,
   VolumeX,
@@ -63,7 +64,7 @@ import {
   watchKey,
   type WatchIndex,
 } from "../lib/progress";
-import { EpisodeRow } from "./Details";
+import { EpisodeRow, SourceBadges } from "./Details";
 import {
   loadEpisodeRatings,
   type EpisodeRatings,
@@ -234,6 +235,8 @@ export type PlayerProps = {
   tmdbConfig?: MetadataEnrichmentConfig["tmdb"];
   /** Other releases of what is playing, once something has gone and asked. */
   sources?: Stream[];
+  /** So the picker's rows carry the badges the sources sheet gives them. */
+  streamBadgeSettings?: StreamBadgeSettings;
   sourcesBusy?: boolean;
   /** Asked for when the picker is first opened, not before. */
   onRequestSources?(): void;
@@ -269,6 +272,7 @@ export function Player({
   episodeCardStyle = "horizontal",
   tmdbConfig,
   sources,
+  streamBadgeSettings,
   sourcesBusy = false,
   onRequestSources,
   onSelectSource,
@@ -320,6 +324,8 @@ export function Player({
   /** Read by callbacks that must not be rebuilt on every tick of the clock. */
   const currentTimeRef = useRef(0);
   currentTimeRef.current = currentTime;
+  /** The source whose resume point has already been honoured. */
+  const resumedFor = useRef<string | undefined>(undefined);
   const [duration, setDuration] = useState(0);
   const [seekPreview, setSeekPreview] = useState<number | null>(null);
   const seekPreviewRef = useRef<number | null>(null);
@@ -1022,6 +1028,11 @@ export function Player({
     if (nativePlayer) return;
     const element = videoRef.current;
     if (!element || !url) {
+      // Before the early return, not after it: a chosen source with no browser
+      // URL used to leave the player believing it was still mid-switch, which
+      // disables the source and next-episode controls for good — so the one
+      // way out of the failure was the way back in.
+      setSwitching(false);
       setWaiting(false);
       setError("This source does not provide a direct browser video URL.");
       return;
@@ -1087,7 +1098,9 @@ export function Player({
       const choices = Array.from({ length: list.length }, (_, index) => ({
         id: index,
         label:
-          list[index].label || list[index].language || `Audio ${index + 1}`,
+          list[index].label ||
+          languageName(list[index].language) ||
+          `Audio ${index + 1}`,
       }));
       setAudioTracks(choices);
       if (!preferredAudioApplied) {
@@ -1179,10 +1192,15 @@ export function Player({
     // would fight the user. Remuxed playback restarts conversion from the
     // Matroska cue instead of downloading linearly from zero to the resume
     // point.
-    let resumed = startPositionMs <= 0;
+    // Once per source, not once per run of this effect. The effect re-runs on
+    // things that have nothing to do with the file — a language preference, a
+    // route that refused — and each of those used to re-arm the seek, which
+    // would drag playback back to where a source was swapped an hour ago.
+    let resumed = startPositionMs <= 0 || resumedFor.current === url;
     const onResume = () => {
       if (resumed || !Number.isFinite(element.duration)) return;
       resumed = true;
+      resumedFor.current = url;
       const target = startPositionMs / 1000;
       // Never seek past the end; a stale row from a different cut of the same
       // episode would otherwise drop playback at the credits.
@@ -1461,7 +1479,8 @@ export function Player({
           const syncTracks = () => {
             const tracks = hls.audioTracks.map((track, index) => ({
               id: index,
-              label: track.name || track.lang || `Audio ${index + 1}`,
+              label:
+                track.name || languageName(track.lang) || `Audio ${index + 1}`,
             }));
             setAudioTracks(tracks);
             if (!preferredAudioApplied) {
@@ -1898,7 +1917,21 @@ export function Player({
       onPointerDown={showControls}
     >
       <style>{cueCss}</style>
+      {/*
+        Keyed by source, so a swap gets new elements rather than the ones the
+        last source was using.
+
+        Changing a release mid-episode is the case this exists for. React runs
+        the teardown and the setup of the load effect back to back in one
+        commit, so the second source was being built on an element still
+        carrying the first: its buffered ranges, its readyState, its error, its
+        track lists, and a load algorithm that had only just been told to
+        abort. An episode change does the same thing but has seconds of
+        resolving in between, which is why it never showed this. New elements
+        cost a frame and make the two cases identical.
+      */}
       <video
+        key={url}
         ref={videoRef}
         className={!hdrEnabled ? "player-hdr-limited" : undefined}
         playsInline
@@ -1915,6 +1948,7 @@ export function Player({
       {/* Where the decoder draws. Object-fit matches the video element so the
           two look the same whichever is playing. */}
       <canvas
+        key={url}
         ref={canvasRef}
         className={`player-canvas${!hdrEnabled ? " player-hdr-limited" : ""}`}
         style={{
@@ -2231,11 +2265,6 @@ export function Player({
                       stays silent.
                     </small>
                   )}
-                  {!nativePlayer && navigableExternalUrl && (
-                    <a href={navigableExternalUrl} target="_blank" rel="noopener noreferrer">
-                      <ExternalLink /> Open externally
-                    </a>
-                  )}
                 </div>
               )}
             </div>
@@ -2272,66 +2301,25 @@ export function Player({
             {/* Swapping release without going back to the sheet: only offered
                 where the app can actually resolve another one. */}
             {onSelectSource && (
-              <div className="audio-picker">
-                <button
-                  aria-label="Sources"
-                  title="Sources"
-                  className={sourcesOpen ? "active" : ""}
-                  aria-expanded={sourcesOpen}
-                  onClick={() => {
-                    setPlaybackMenuOpen(false);
-                    setAudioOpen(false);
-                    setSubsOpen(false);
-                    setExternalPlayerOpen(false);
-                    setEpisodesOpen(false);
-                    // Asked for on the first look rather than with every
-                    // stream: most playback never opens this.
-                    if (!sourcesOpen && !sources?.length) onRequestSources?.();
-                    setSourcesOpen((value) => !value);
-                  }}
-                >
-                  <Layers />
-                </button>
-                {sourcesOpen && (
-                  <div className="audio-menu source-menu">
-                    <strong>Sources</strong>
-                    {/* What is playing, named — the list below is long and the
-                        row it matches is often scrolled out of sight. */}
-                    <div className="source-menu-current">
-                      <small>Playing</small>
-                      <span>{sourceLabel(stream)}</span>
-                      <small>{stream.addonName}</small>
-                    </div>
-                    {sources?.map((item) => {
-                      const current = sourceKey(item) === sourceKey(stream);
-                      return (
-                        <button
-                          key={sourceKey(item)}
-                          className={current ? "selected" : ""}
-                          disabled={current || switching}
-                          onClick={() => startSource(item)}
-                        >
-                          <span>{sourceLabel(item)}</span>
-                          <small>
-                            {item.name || item.addonName}
-                            {item.addonName && item.name
-                              ? ` · ${item.addonName}`
-                              : ""}
-                          </small>
-                        </button>
-                      );
-                    })}
-                    {sourcesBusy && (
-                      <p className="source-menu-busy">
-                        <LoaderCircle className="spin" /> Asking addons…
-                      </p>
-                    )}
-                    {!sourcesBusy && !sources?.length && (
-                      <p>No other releases came back for this.</p>
-                    )}
-                  </div>
-                )}
-              </div>
+              <button
+                aria-label="Sources"
+                title="Sources"
+                className={sourcesOpen ? "active" : ""}
+                aria-expanded={sourcesOpen}
+                onClick={() => {
+                  setPlaybackMenuOpen(false);
+                  setAudioOpen(false);
+                  setSubsOpen(false);
+                  setExternalPlayerOpen(false);
+                  setEpisodesOpen(false);
+                  // Asked for on the first look rather than with every
+                  // stream: most playback never opens this.
+                  if (!sourcesOpen && !sources?.length) onRequestSources?.();
+                  setSourcesOpen((value) => !value);
+                }}
+              >
+                <SourceSwapIcon />
+              </button>
             )}
             {!!episodes?.length && onPlayEpisode && (
               <button
@@ -2419,6 +2407,88 @@ export function Player({
           >
             <SkipForward /> Play
           </button>
+        </div>
+      )}
+      {sourcesOpen && onSelectSource && (
+        /* The sheet's own list, in the middle of the picture. It was a menu
+           in the corner of the controls first, which is the right shape for
+           picking an audio track and the wrong one for reading release names:
+           they run long, carry badges, and there can be forty of them. */
+        <div
+          className="player-sources-scrim"
+          onClick={() => setSourcesOpen(false)}
+        >
+          <section
+            className="player-sources"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Sources"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header>
+              <div>
+                <span className="eyebrow">SOURCES</span>
+                <strong>{video?.title || meta.name}</strong>
+              </div>
+              <button
+                className="circle-button"
+                aria-label={t("action.close")}
+                onClick={() => setSourcesOpen(false)}
+              >
+                <X />
+              </button>
+            </header>
+            <div className="source-list">
+              {sources?.map((item) => {
+                const current = sourceKey(item) === sourceKey(stream);
+                return (
+                  <article
+                    key={sourceKey(item)}
+                    className={current ? "is-playing" : undefined}
+                  >
+                    <button
+                      className="source-main"
+                      disabled={current || switching}
+                      onClick={() => startSource(item)}
+                    >
+                      <span>
+                        {item.addonLogo ? (
+                          <img src={item.addonLogo} alt="" />
+                        ) : (
+                          <Play size={18} />
+                        )}
+                      </span>
+                      <div>
+                        {streamBadgeSettings?.placement === "TOP" && (
+                          <SourceBadges stream={item} settings={streamBadgeSettings} />
+                        )}
+                        <strong>{item.name || item.addonName}</strong>
+                        <p>{sourceLabel(item)}</p>
+                        <small>
+                          {item.addonName}
+                          {current ? " · Playing now" : ""}
+                        </small>
+                        {streamBadgeSettings?.placement === "BOTTOM" && (
+                          <SourceBadges stream={item} settings={streamBadgeSettings} />
+                        )}
+                      </div>
+                    </button>
+                  </article>
+                );
+              })}
+              {sourcesBusy && (
+                <div className="source-pending" role="status">
+                  <i className="mini-spinner" aria-hidden="true" />
+                  <span>{t("sources.fetching")}</span>
+                </div>
+              )}
+              {!sourcesBusy && !sources?.length && (
+                <div className="source-pending">
+                  No other releases came back for this.
+                </div>
+              )}
+            </div>
+          </section>
         </div>
       )}
       {episodesOpen && !!episodes?.length && (

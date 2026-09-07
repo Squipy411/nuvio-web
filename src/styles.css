@@ -3120,9 +3120,9 @@ html.native-player-active.native-player-covered .player-view.native-player {
   background: none;
   transition: opacity 0.2s ease;
 }
-/* The glyph alone, larger. A filled circle in the middle of the picture is a
-   lot of furniture for a control that is only a hint — a drop shadow separates
-   it from a bright scene without covering any of it. */
+/* The accent glyph on a solid black disc: it only ever shows while paused, and
+   a still frame can be any colour at all under it. Opaque rather than tinted,
+   so the glyph never has to compete with whatever it is resting on. */
 .player-center {
   position: absolute;
   z-index: 3;
@@ -3132,9 +3132,10 @@ html.native-player-active.native-player-covered .player-view.native-player {
   height: 96px;
   transform: translate(-50%, -50%);
   border: 0;
-  background: none;
+  border-radius: 50%;
+  background: #000;
   color: var(--accent);
-  filter: drop-shadow(0 2px 14px #000c);
+  box-shadow: 0 10px 34px #000a;
   display: grid;
   place-items: center;
   cursor: pointer;
@@ -3145,8 +3146,12 @@ html.native-player-active.native-player-covered .player-view.native-player {
 .player-center:hover {
   transform: translate(-50%, -50%) scale(1.05);
 }
+/* The spinner is not a button and takes no disc — a black circle around a
+   loading ring would read as something to press. */
 .player-center-busy {
   pointer-events: none;
+  background: none;
+  box-shadow: none;
 }
 .player-center-busy:hover {
   transform: translate(-50%, -50%);
@@ -3350,76 +3355,121 @@ html.native-player-active.native-player-covered .player-view.native-player {
   color: #a4adb7;
   line-height: 1.45;
 }
-/* Release names are long and there can be forty of them, so this one is wider
-   than the track pickers and scrolls rather than running off the top of the
-   window. */
-.source-menu {
-  width: min(430px, calc(100vw - 30px));
-  max-height: min(60vh, 460px);
+/* ---- The player's source picker ---------------------------------------- */
+/* A panel in the middle of the picture rather than a menu in the corner of
+   the controls: these are the sheet's rows, and they run long, carry badges,
+   and there can be forty of them. */
+.player-sources-scrim {
+  position: absolute;
+  z-index: 6;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: max(20px, env(safe-area-inset-top)) 16px
+    max(20px, env(safe-area-inset-bottom));
+  background: #0009;
+  -webkit-backdrop-filter: blur(10px) saturate(1.05);
+  backdrop-filter: blur(10px) saturate(1.05);
+}
+.player-sources {
+  display: flex;
+  flex-direction: column;
+  width: min(680px, 100%);
+  max-height: 100%;
+  min-height: 0;
+  padding: 20px 20px 6px;
+  border: 1px solid var(--episodes-line);
+  border-radius: 22px;
+  background: var(--episodes-bg);
+  box-shadow: 0 28px 90px #000c;
+  animation: player-sources-in 0.16s ease-out;
+}
+@keyframes player-sources-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .player-sources {
+    animation: none;
+  }
+}
+.player-sources > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+.player-sources > header strong {
+  display: block;
+  overflow: hidden;
+  font-size: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The list is the scroller, so the heading stays put through forty rows.
+   Content-sized rows for the same reason the sheet's list needs them: a grid
+   handed a definite height divides it between its auto rows, which squashed
+   every card to a quarter of the panel and clipped the release name. */
+.player-sources > .source-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  align-content: start;
+  grid-auto-rows: max-content;
+  margin-top: 16px;
+  padding-bottom: 14px;
   overflow-y: auto;
   overscroll-behavior: none;
+  scrollbar-color: #34353a #080809;
   scrollbar-width: thin;
 }
-/* What is playing, pinned above the list: the row it matches is usually
-   scrolled out of sight by the time you are reading this. */
-.source-menu .source-menu-current {
-  display: grid;
-  gap: 3px;
-  margin: 0 0 4px;
-  padding: 9px 10px;
-  border: 1px solid var(--episodes-field-line);
-  border-radius: 10px;
-  background: var(--episodes-field);
+/* The sheet's cards read as white-on-blur; on this ground they need their own
+   fill, or they disappear into it. */
+.player-sources .source-list article {
+  border-color: var(--episodes-field-line);
+  background: var(--episodes-raised);
 }
-.source-menu .source-menu-current > span {
-  overflow-wrap: anywhere;
-  font-size: 12px;
-  line-height: 1.4;
+@media (hover: hover) and (pointer: fine) {
+  .player-sources .source-list article:hover {
+    border-color: #33343a;
+    background: var(--episodes-hover);
+  }
 }
-.source-menu .source-menu-current > small {
-  margin: 0;
-  color: #7f8994;
-  font-size: 10px;
+/* What is playing: named in its own row rather than pinned above the list, so
+   there is one of everything and the order stays the addons' own. */
+.player-sources .source-list article.is-playing {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  background: color-mix(in srgb, var(--accent) 13%, var(--episodes-raised));
 }
-/* Two lines, left-aligned: the release on top and where it came from under
-   it, which is the shape the sources sheet uses for the same information. */
-.player-control-group .source-menu > button {
-  display: grid;
-  gap: 3px;
-  justify-items: start;
-  height: auto;
-  min-height: 44px;
-  padding: 9px 10px;
-  text-align: left;
-}
-.source-menu > button > span {
-  overflow-wrap: anywhere;
-  font-size: 12px;
-  font-weight: 600;
-  line-height: 1.4;
-}
-.source-menu > button > small {
-  margin: 0;
-  color: #7f8994;
-  font-size: 10px;
-}
-.source-menu > button.selected > small,
-.source-menu > button:disabled > small {
-  color: inherit;
-  opacity: 0.72;
-}
-.source-menu > button:disabled {
+.player-sources .source-list article.is-playing .source-main {
   cursor: default;
 }
-.source-menu .source-menu-busy {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.source-menu .source-menu-busy svg {
-  width: 15px;
-  height: 15px;
+.player-sources .source-list article.is-playing small {
   color: var(--accent);
+}
+.player-sources .source-main:disabled {
+  cursor: default;
+}
+.player-sources .source-main > span svg {
+  width: 17px;
+  height: 17px;
+  color: #aeb7c0;
+}
+@media (max-width: 760px) {
+  .player-sources {
+    width: 100%;
+    padding: 16px 14px 4px;
+    border-radius: 18px;
+  }
+  .player-sources > header strong {
+    font-size: 16px;
+  }
 }
 .audio-menu a {
   display: flex;
@@ -3546,8 +3596,16 @@ html.native-player-active.native-player-covered .player-view.native-player {
     height: 44px;
   }
   .player-center {
-    width: 62px;
-    height: 62px;
+    width: 68px;
+    height: 68px;
+  }
+  .player-center svg {
+    width: 44px;
+    height: 44px;
+  }
+  .player-center-busy svg {
+    width: 38px;
+    height: 38px;
   }
   .player-controls {
     padding: 12px 12px max(12px, env(safe-area-inset-bottom));

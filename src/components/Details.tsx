@@ -316,7 +316,8 @@ function afterDetailLayout(): Promise<void> {
   });
 }
 
-function SourceBadges({
+/** Exported for the player's own source picker, which lists the same rows. */
+export function SourceBadges({
   stream,
   settings,
 }: {
