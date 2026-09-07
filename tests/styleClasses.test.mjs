@@ -27,7 +27,6 @@ const INTENTIONAL = new Set([
   "continue-section",
   "inline-error",
   "integration-hub",
-  "is-detailed",
   "plugin-browser-note",
   "subtitle-grid",
 ]);

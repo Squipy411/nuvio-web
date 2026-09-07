@@ -50,11 +50,58 @@ test('web player exposes real speed, stable-volume, HDR, and surface controls', 
   assert.match(component, /engine\.setStableVolume\(stableVolume\)/);
   assert.match(component, /CSS\.supports\("dynamic-range-limit", "standard"\)/);
   assert.match(component, /onClick=\{handleSurfaceClick\}/);
-  assert.match(component, /playing \? <SolidPause \/> : <SolidPlay \/>/);
   assert.match(engine, /createDynamicsCompressor\(\)/);
   assert.match(engine, /node\.playbackRate\.value = this\.playbackRate/);
   assert.match(styles, /dynamic-range-limit: standard/);
-  assert.match(styles, /\.player-center \{[\s\S]*background: #080808e8/);
+});
+
+test('the centre of the picture is a play hint, not a pause indicator', () => {
+  const component = readFileSync(
+    new URL("../src/components/Player.tsx", import.meta.url),
+    "utf8",
+  );
+  const styles = readFileSync(
+    new URL("../src/styles.css", import.meta.url),
+    "utf8",
+  );
+
+  // Tapping the picture pauses; nothing is then drawn over a playing frame.
+  // The transport button in the control row still shows both — that one is a
+  // labelled control rather than a hint over the picture.
+  assert.match(component, /!error && !waiting && !playing && \(/);
+  const centre = /className="player-center"[\s\S]*?<\/button>/.exec(component);
+  assert.ok(centre, "no centre button found");
+  assert.doesNotMatch(centre[0], /SolidPause/);
+  // The glyph alone in the accent, not a white one on a filled disc.
+  assert.match(styles, /\.player-center \{[^}]*color: var\(--accent\)/);
+  assert.doesNotMatch(styles, /\.player-center \{[^}]*background: #/);
+});
+
+test('the player borrows the episodes panel palette rather than a second one', () => {
+  const component = readFileSync(
+    new URL("../src/components/Player.tsx", import.meta.url),
+    "utf8",
+  );
+  const styles = readFileSync(
+    new URL("../src/styles.css", import.meta.url),
+    "utf8",
+  );
+
+  // The detail page's panel and the player's own surfaces read from the same
+  // tokens, so changing one cannot leave the other behind.
+  assert.match(styles, /--episodes-bg: #030304/);
+  for (const selector of [
+    "\\.detail-view\\.has-episode-panel \\.episodes",
+    "\\.player-episodes",
+    "\\.audio-menu,\\s*\\n\\.external-player-menu",
+  ])
+    assert.match(
+      styles,
+      new RegExp(`${selector} \\{[^}]*background: (?:color-mix\\(in srgb, )?var\\(--episodes-bg\\)`),
+    );
+  // Episode scores, from the same service and cache the detail page uses.
+  assert.match(component, /rating=\{episodeRatings\.get\(/);
+  assert.match(component, /loadEpisodeRatings\(tmdbId\)/);
 });
 
 test('the experimental Movi player is no longer shipped or selectable', () => {

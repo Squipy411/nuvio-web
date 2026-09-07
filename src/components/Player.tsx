@@ -64,6 +64,14 @@ import {
 } from "../lib/progress";
 import { EpisodeRow } from "./Details";
 import {
+  loadEpisodeRatings,
+  type EpisodeRatings,
+} from "../lib/episodeRatings";
+import {
+  tmdbIdForMeta,
+  type MetadataEnrichmentConfig,
+} from "../lib/metadataEnrichment";
+import {
   activeSkipSegment,
   loadSkipSegments,
   parseNativeSkipSegments,
@@ -191,6 +199,10 @@ export type PlayerProps = {
   startPositionMs?: number;
   episodes?: Video[];
   blurUnwatchedEpisodes?: boolean;
+  /** The same choice the detail page's list obeys. */
+  episodeCardStyle?: "horizontal" | "list";
+  /** Resolves the show's TMDB id, which is what the ratings service is keyed by. */
+  tmdbConfig?: MetadataEnrichmentConfig["tmdb"];
   animeSkipClientId?: string;
   watchIndex?: WatchIndex;
   mode?: ExternalPlayerMode;
@@ -218,6 +230,8 @@ export function Player({
   watchIndex,
   onPlayEpisode,
   blurUnwatchedEpisodes = false,
+  episodeCardStyle = "horizontal",
+  tmdbConfig,
   animeSkipClientId = "",
   mode,
 }: PlayerProps) {
@@ -366,6 +380,30 @@ export function Player({
     () => (episodes ?? []).filter((item) => (item.season ?? 0) === season),
     [episodes, season],
   );
+  /**
+   * IMDb's per-episode scores, so this list reads as the detail page's list
+   * rather than the same rows with their badges missing.
+   *
+   * Asked for when the panel is first opened rather than when playback starts:
+   * the service is only worth a request if the list is actually looked at, and
+   * the lookup shares the detail page's cache — arriving here from a show that
+   * has already drawn them costs nothing.
+   */
+  const [episodeRatings, setEpisodeRatings] = useState<EpisodeRatings>(
+    () => new Map(),
+  );
+  useEffect(() => {
+    if (!episodesOpen || meta.type !== "series" || !tmdbConfig) return;
+    let live = true;
+    void tmdbIdForMeta(meta, tmdbConfig)
+      .then((tmdbId) => (tmdbId ? loadEpisodeRatings(tmdbId) : new Map()))
+      .then((ratings) => {
+        if (live) setEpisodeRatings(ratings as EpisodeRatings);
+      });
+    return () => {
+      live = false;
+    };
+  }, [episodesOpen, meta, meta.id, meta.type, tmdbConfig]);
   const [audioTracks, setAudioTracks] = useState<AudioChoice[]>([]);
   const [selectedAudio, setSelectedAudio] = useState(-1);
   const [nativeFullscreen, setNativeFullscreen] = useState(false);
@@ -1844,13 +1882,16 @@ export function Player({
           <LoaderCircle className="spin" />
         </div>
       )}
-      {!error && !waiting && (
+      {/* Paused only. A pause glyph held over a playing picture is furniture:
+          moving frames already say it is playing, and the thing that pauses is
+          the picture itself. */}
+      {!error && !waiting && !playing && (
         <button
           className="player-center"
-          aria-label={playing ? "Pause" : "Play"}
+          aria-label="Play"
           onClick={togglePlayback}
         >
-          {playing ? <SolidPause /> : <SolidPlay />}
+          <SolidPlay />
         </button>
       )}
       {status && !waiting && !error && (
@@ -2289,13 +2330,16 @@ export function Player({
                 {seasonEpisodes.length === 1 ? "episode" : "episodes"}
               </span>
             </div>
-            <div className="player-episode-list episode-list is-detailed">
+            <div
+              className={`player-episode-list episode-list is-${episodeCardStyle}`}
+            >
               {seasonEpisodes.map((item) => {
                 const key = watchKey(meta.id, item.season, item.episode);
                 return (
                   <EpisodeRow
                     key={item.id}
                     video={item}
+                    rating={episodeRatings.get(`${item.season}:${item.episode}`)}
                     watched={watchIndex?.watched.has(key) ?? false}
                     percent={watchIndex ? episodePercent(watchIndex, key) : 0}
                     remaining={watchIndex ? remainingShort(watchIndex, key) : ""}

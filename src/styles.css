@@ -592,47 +592,13 @@ a {
   margin: 0 0 26px;
   overflow: hidden;
 }
-.search-result-groups > .media-section + .media-section,
-.search-result-groups > .media-section + .search-result-group,
-.search-result-groups > .search-result-group + .media-section {
+.search-result-groups > .media-section + .media-section {
   margin-top: 0;
 }
 .search-result-groups .media-row {
   width: 100%;
   min-width: 0;
   max-width: 100%;
-}
-.search-result-group > header {
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 16px;
-}
-.search-result-group.is-empty {
-  width: 100%;
-  min-width: 0;
-  margin: 0 0 26px;
-}
-.search-result-group h2 {
-  margin: 0 0 4px;
-  font-size: 25px;
-}
-.search-result-group header span {
-  color: #8d97a2;
-  font-size: 13px;
-}
-.search-result-group header > strong {
-  color: #8d97a2;
-  font-size: 13px;
-}
-.search-result-group .poster-grid {
-  margin-top: 16px;
-}
-.search-group-empty {
-  grid-column: 1 / -1;
-  padding: 18px 0;
-  color: #737e89;
-  font-size: 14px;
 }
 .back-inline {
   border: 0;
@@ -1788,14 +1754,14 @@ a {
   max-height: calc(100% - 180px);
   overflow-y: auto;
   padding: 18px;
-  border: 1px solid var(--panel-border);
+  border: 1px solid var(--episodes-line);
   border-radius: 20px;
-  background: var(--app-bg, #080a0d);
+  background: var(--episodes-bg);
   color: var(--text);
   font-size: 14px;
 }
 .player-diagnostics header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.player-diagnostics header button { display: grid; place-items: center; padding: 8px; border-radius: 50%; background: var(--panel-soft); color: inherit; }
+.player-diagnostics header button { display: grid; place-items: center; padding: 8px; border-radius: 50%; background: var(--episodes-field); color: inherit; }
 .player-diagnostics dl { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .player-diagnostics dt, .player-diagnostics p { color: var(--muted); }
 .player-diagnostics dd { margin: 0; overflow-wrap: anywhere; }
@@ -2907,6 +2873,16 @@ a {
   --panel-bg: #0c0f13;
   --panel-soft: #12161b;
   --panel-border: #232930;
+  /* The episodes panel's own near-black, named because the player borrows it.
+     Its episode list and its menus are the same furniture seen over a picture
+     instead of over a page, and painting them from a second, greyer palette
+     made playback look like a different application. */
+  --episodes-bg: #030304;
+  --episodes-line: #1a1b1e;
+  /* Inset surfaces on that ground: the season select, the speed buttons. */
+  --episodes-field: #0a0a0b;
+  --episodes-field-line: #232428;
+  --episodes-hover: #17181b;
 }
 :root[data-theme="amoled"] {
   --app-bg: #000;
@@ -3120,8 +3096,9 @@ html.native-player-active.native-player-covered .player-view.native-player {
   background: none;
   transition: opacity 0.2s ease;
 }
-/* A familiar, high-contrast transport target that stays legible over both a
-   bright frame and a black one. */
+/* The glyph alone, larger. A filled circle in the middle of the picture is a
+   lot of furniture for a control that is only a hint — a drop shadow separates
+   it from a bright scene without covering any of it. */
 .player-center {
   position: absolute;
   z-index: 3;
@@ -3130,11 +3107,10 @@ html.native-player-active.native-player-covered .player-view.native-player {
   width: 96px;
   height: 96px;
   transform: translate(-50%, -50%);
-  border: 1px solid #ffffff24;
-  border-radius: 50%;
-  background: #080808e8;
-  color: #fff;
-  box-shadow: 0 10px 32px #0009;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  filter: drop-shadow(0 2px 14px #000c);
   display: grid;
   place-items: center;
   cursor: pointer;
@@ -3144,26 +3120,20 @@ html.native-player-active.native-player-covered .player-view.native-player {
 }
 .player-center:hover {
   transform: translate(-50%, -50%) scale(1.05);
-  background: #151515f2;
 }
 .player-center-busy {
   pointer-events: none;
-  border: 0;
-  background: none;
-  color: var(--accent);
-  box-shadow: none;
 }
 .player-center-busy:hover {
   transform: translate(-50%, -50%);
-  background: none;
 }
 .player-center-busy svg {
   width: 52px;
   height: 52px;
 }
 .player-center svg {
-  width: 48px;
-  height: 48px;
+  width: 64px;
+  height: 64px;
 }
 .player-status {
   z-index: 4;
@@ -3313,6 +3283,8 @@ html.native-player-active.native-player-covered .player-view.native-player {
   overscroll-behavior: none;
   scrollbar-width: thin;
 }
+/* The episodes panel's ground, a shade off opaque so a bright frame still
+   shows through the edges of a menu resting on it. */
 .audio-menu,
 .external-player-menu {
   position: absolute;
@@ -3320,8 +3292,8 @@ html.native-player-active.native-player-covered .player-view.native-player {
   bottom: 56px;
   width: min(330px, calc(100vw - 30px));
   padding: 14px;
-  background: #101419fa;
-  border: 1px solid #343b43;
+  background: color-mix(in srgb, var(--episodes-bg) 97%, transparent);
+  border: 1px solid var(--episodes-line);
   border-radius: 16px;
   box-shadow: 0 18px 50px #000b;
   display: grid;
@@ -3346,7 +3318,7 @@ html.native-player-active.native-player-covered .player-view.native-player {
    a touch device has none, and the selected row keeps its own fill. */
 .audio-menu > button:not(.selected):hover,
 .external-player-menu > button:hover {
-  background: #343b43;
+  background: var(--episodes-hover);
 }
 .audio-menu p,
 .audio-menu small {
@@ -3361,7 +3333,8 @@ html.native-player-active.native-player-covered .player-view.native-player {
   margin-top: 4px;
   padding: 10px;
   border-radius: 9px;
-  background: #262c33;
+  background: var(--episodes-field);
+  border: 1px solid var(--episodes-field-line);
   text-decoration: none;
 }
 .audio-menu a svg {
@@ -3388,13 +3361,15 @@ html.native-player-active.native-player-covered .player-view.native-player {
   height: 36px;
   padding: 0 5px;
   border-radius: 9px;
-  background: #22272d;
+  border: 1px solid var(--episodes-field-line);
+  background: var(--episodes-field);
   font-weight: 700;
 }
 .player-control-group .playback-rate-grid button:hover {
-  background: #343b43;
+  background: var(--episodes-hover);
 }
 .player-control-group .playback-rate-grid button.selected {
+  border-color: transparent;
   background: var(--accent-gradient, var(--accent));
   color: var(--accent-ink);
 }
@@ -3425,9 +3400,9 @@ html.native-player-active.native-player-covered .player-view.native-player {
   width: 42px;
   height: 24px;
   margin: 0;
-  border: 1px solid #ffffff2a;
+  border: 1px solid var(--episodes-field-line);
   border-radius: 999px;
-  background: #353a40;
+  background: #26272b;
   cursor: pointer;
   transition: background 0.15s ease;
 }
@@ -3478,10 +3453,6 @@ html.native-player-active.native-player-covered .player-view.native-player {
   .player-center {
     width: 62px;
     height: 62px;
-  }
-  .player-center svg {
-    width: 32px;
-    height: 32px;
   }
   .player-controls {
     padding: 12px 12px max(12px, env(safe-area-inset-bottom));
@@ -5008,6 +4979,16 @@ body.is-locked {
 .empty-state span {
   color: #8d97a2;
   font-size: 13px;
+}
+/* Nothing at all came back, so this is the whole answer rather than a caption
+   above a list — sized to be read as one. */
+.search-empty-state {
+  padding: 90px 26px;
+}
+.search-empty-state strong {
+  font-size: clamp(26px, 4vw, 40px);
+  line-height: 1.25;
+  letter-spacing: -0.015em;
 }
 
 @media (max-width: 760px) {
@@ -7527,8 +7508,8 @@ body.is-locked {
     flex-direction: column;
     margin: 0;
     padding: 31px 27px 20px;
-    border-left: 1px solid #1a1b1e;
-    background: #030304;
+    border-left: 1px solid var(--episodes-line);
+    background: var(--episodes-bg);
     box-shadow: -22px 0 55px #0007;
   }
   .detail-view.has-episode-panel .episodes header {
@@ -7554,8 +7535,8 @@ body.is-locked {
     width: auto;
     margin: 0;
     padding: 11px 34px 11px 13px;
-    border-color: #232428;
-    background: #0a0a0b;
+    border-color: var(--episodes-field-line);
+    background: var(--episodes-field);
   }
   .detail-view.has-episode-panel .episodes h2 {
     margin-bottom: 8px;
@@ -8446,8 +8427,9 @@ body.is-locked {
   width: min(460px, 100%);
   display: flex;
   flex-direction: column;
-  background: var(--app-bg);
-  border-left: 1px solid var(--panel-border);
+  background: var(--episodes-bg);
+  border-left: 1px solid var(--episodes-line);
+  box-shadow: -22px 0 55px #0007;
   animation: player-episodes-in 0.18s ease-out;
 }
 @keyframes player-episodes-in {
@@ -8475,12 +8457,37 @@ body.is-locked {
   font-size: 17px;
 }
 /* display:contents on the wrapper means the select is the child that lays
-   out, so the spacing belongs to it. */
+   out, so the spacing belongs to it. Painted as the detail panel's select is,
+   rather than the lighter one the page uses inline. */
+.player-episodes .season-select-wrap > span {
+  display: block;
+  margin: 0 16px 5px;
+  color: #85878d;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+}
 .player-episodes select {
   margin: 0 16px 12px;
+  padding: 11px 34px 11px 13px;
+  border-color: var(--episodes-field-line);
+  background: var(--episodes-field);
 }
+/* Hidden by default because the page's inline list has a heading above it
+   already; this panel does not, so here it is the only thing naming the
+   season being looked at. */
 .player-episodes > .episode-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin: 0 16px 10px;
+}
+.player-episodes > .episode-list-heading strong {
+  font-size: 15px;
+}
+.player-episodes > .episode-list-heading span {
+  color: #777b82;
+  font-size: 10px;
 }
 /* The detail page's own list, so its rows keep their own styling; only the
    scrolling belongs to the panel. */
@@ -8489,6 +8496,15 @@ body.is-locked {
   overflow-y: auto;
   overscroll-behavior: none;
   padding: 0 16px max(16px, env(safe-area-inset-bottom));
+  scrollbar-color: #34353a #080809;
+  scrollbar-width: thin;
+}
+/* The tighter rhythm the detail page's panel uses. Phones keep the roomier
+   spacing their much taller episode cards were drawn for. */
+@media (min-width: 761px) {
+  .player-episode-list {
+    gap: 5px;
+  }
 }
 
 @media (max-width: 760px) {

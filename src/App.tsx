@@ -2565,6 +2565,8 @@ export function App() {
           {...playback}
           settings={webSettings.player}
           blurUnwatchedEpisodes={webSettings.metaScreen.blurUnwatchedEpisodes}
+          episodeCardStyle={webSettings.metaScreen.episodeCardStyle}
+          tmdbConfig={metadataEnrichment.tmdb}
           animeSkipClientId={providerCredential(providerCredentials, "animeskip", "client_id")}
           startPositionMs={
             playback.startAtBeginning
