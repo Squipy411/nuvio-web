@@ -1141,6 +1141,11 @@ a {
   display: grid;
   gap: 10px;
 }
+.episode-list-sentinel {
+  width: 100%;
+  height: 1px;
+  pointer-events: none;
+}
 
 /* Content & Discovery: plugin repositories intentionally share the visual
    language of addons, while their provider switches stay device-local. */
@@ -1786,14 +1791,25 @@ a {
 .player-diagnostics dt, .player-diagnostics p { color: var(--muted); }
 .player-diagnostics dd { margin: 0; overflow-wrap: anywhere; }
 .player-diagnostics p { line-height: 1.5; margin-bottom: 0; }
-/* The title takes the slack so the pickers and the way out stay together on
-   the right, and both halves may shrink rather than wrapping into height the
-   pinned header would then keep for the whole scroll. */
+/* Keep navigation beside the title, then give the filters a full row of their
+   own. Long show names can now ellipsise without pushing either picker or the
+   refresh action outside the sheet. */
+.source-column > header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+}
 .source-column > header > :first-child {
-  flex: 1 1 auto;
+  grid-column: 2;
+  grid-row: 1;
   min-width: 0;
 }
 .source-sheet-tools {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
   min-width: 0;
 }
 /* Leading the row at every width, like the back arrow on every other screen.
@@ -1802,27 +1818,22 @@ a {
    the window. An X belongs in the corner it closes from; a back arrow does
    not, and this sheet is a place you go back from. */
 .source-sheet-back {
-  order: -1;
-  flex: 0 0 auto;
+  grid-column: 1;
+  grid-row: 1;
 }
-/* Two pickers and the way out do not fit a phone on one line. The title keeps
-   the arrow beside it and the pickers take the row below. */
-@media (max-width: 999px) {
-  .source-column > header {
-    flex-wrap: wrap;
-    row-gap: 10px;
-  }
+.source-sheet-refresh {
+  grid-column: 3;
+  grid-row: 1;
+}
+.source-sheet-tools .source-player,
+.source-sheet-tools select {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+}
+@media (max-width: 520px) {
   .source-sheet-tools {
-    order: 1;
-    flex: 1 0 100%;
-  }
-  .source-sheet-tools .source-player {
-    flex: 1 1 0;
-    min-width: 0;
-  }
-  .source-sheet-tools select {
-    min-width: 0;
-    width: 100%;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 .source-sheet h2 {
@@ -6044,7 +6055,6 @@ body.is-locked {
 
 /* ---- Source panel tools ------------------------------------------------ */
 .source-sheet-tools {
-  display: flex;
   align-items: center;
   gap: 10px;
 }
@@ -6150,7 +6160,8 @@ body.is-locked {
      the title, which would otherwise be clipped on a 375px screen. Narrower
      than that it ellipsises, which is what it is there for. */
   .source-player select {
-    max-width: 36vw;
+    width: 100%;
+    max-width: 100%;
   }
 }
 

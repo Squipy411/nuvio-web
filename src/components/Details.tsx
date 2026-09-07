@@ -66,6 +66,7 @@ import type {
 } from "../lib/metaScreenSettings";
 import { useDragScroll } from "../lib/useDragScroll";
 import { useProgressiveList } from "../lib/useProgressiveList";
+import { useIncrementalList } from "../lib/useIncrementalList";
 import { useLongPress } from "../lib/useLongPress";
 import { useScrollLock } from "../lib/useScrollLock";
 import { useSwipeBack } from "../lib/useSwipeBack";
@@ -756,6 +757,20 @@ export function Details({
       ].some((value) => value?.toLocaleLowerCase().includes(query));
     });
   }, [episodeQuery, meta.videos, season]);
+  const episodeResetKey = `${meta.id}:${season ?? ""}:${episodeQuery.trim().toLocaleLowerCase()}`;
+  const {
+    visible: renderedEpisodes,
+    complete: episodesComplete,
+    sentinelRef: episodeSentinelRef,
+  } = useIncrementalList(visibleEpisodes, {
+    resetKey: episodeResetKey,
+    first: 40,
+    chunk: 40,
+  });
+  const episodeListRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (episodeListRef.current) episodeListRef.current.scrollTop = 0;
+  }, [episodeResetKey]);
   useEffect(() => {
     let live = true;
     if (
@@ -1350,8 +1365,11 @@ export function Details({
             <strong>{season === 0 ? "Specials" : `Season ${season ?? seasons[0] ?? 1}`}</strong>
             <span>{visibleEpisodes.length} {visibleEpisodes.length === 1 ? "episode" : "episodes"}</span>
           </div>
-          <div className={`episode-list is-${metaScreenSettings.episodeCardStyle}`}>
-            {visibleEpisodes.map((video) => (
+          <div
+            ref={episodeListRef}
+            className={`episode-list is-${metaScreenSettings.episodeCardStyle}`}
+          >
+            {renderedEpisodes.map((video) => (
                 <EpisodeRow
                   key={video.id}
                   video={video}
@@ -1377,6 +1395,13 @@ export function Details({
                   onMenu={(x, y) => setMenu({ x, y, video })}
                 />
               ))}
+            {!episodesComplete && (
+              <div
+                ref={episodeSentinelRef}
+                className="episode-list-sentinel"
+                aria-hidden="true"
+              />
+            )}
           </div>
           {episodeRouletteOpen && meta.videos.length > 0 && (
             <EpisodeRoulette
