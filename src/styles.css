@@ -3350,6 +3350,77 @@ html.native-player-active.native-player-covered .player-view.native-player {
   color: #a4adb7;
   line-height: 1.45;
 }
+/* Release names are long and there can be forty of them, so this one is wider
+   than the track pickers and scrolls rather than running off the top of the
+   window. */
+.source-menu {
+  width: min(430px, calc(100vw - 30px));
+  max-height: min(60vh, 460px);
+  overflow-y: auto;
+  overscroll-behavior: none;
+  scrollbar-width: thin;
+}
+/* What is playing, pinned above the list: the row it matches is usually
+   scrolled out of sight by the time you are reading this. */
+.source-menu .source-menu-current {
+  display: grid;
+  gap: 3px;
+  margin: 0 0 4px;
+  padding: 9px 10px;
+  border: 1px solid var(--episodes-field-line);
+  border-radius: 10px;
+  background: var(--episodes-field);
+}
+.source-menu .source-menu-current > span {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.source-menu .source-menu-current > small {
+  margin: 0;
+  color: #7f8994;
+  font-size: 10px;
+}
+/* Two lines, left-aligned: the release on top and where it came from under
+   it, which is the shape the sources sheet uses for the same information. */
+.player-control-group .source-menu > button {
+  display: grid;
+  gap: 3px;
+  justify-items: start;
+  height: auto;
+  min-height: 44px;
+  padding: 9px 10px;
+  text-align: left;
+}
+.source-menu > button > span {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.source-menu > button > small {
+  margin: 0;
+  color: #7f8994;
+  font-size: 10px;
+}
+.source-menu > button.selected > small,
+.source-menu > button:disabled > small {
+  color: inherit;
+  opacity: 0.72;
+}
+.source-menu > button:disabled {
+  cursor: default;
+}
+.source-menu .source-menu-busy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.source-menu .source-menu-busy svg {
+  width: 15px;
+  height: 15px;
+  color: var(--accent);
+}
 .audio-menu a {
   display: flex;
   align-items: center;
@@ -4856,6 +4927,17 @@ body.is-locked {
   letter-spacing: .08em;
   text-transform: uppercase;
 }
+/* The library roulette's row is three pickers sharing the width, so the rule
+   for its labels spreads them all. This row is one picker and a settings
+   button — and "All seasons" stretched across 900px of dialog read as a bug.
+   Named through the row so it outranks that shared rule. */
+.library-roulette-setup .episode-roulette-scope {
+  flex: 0 0 auto;
+}
+.library-roulette-setup .episode-roulette-scope select {
+  width: auto;
+  min-width: 170px;
+}
 .episode-roulette-scope select {
   min-width: 170px;
   padding: 10px 34px 10px 13px;
@@ -4917,11 +4999,13 @@ body.is-locked {
     align-items: end;
     flex-direction: row;
   }
-  .episode-roulette-scope {
-    flex: 1;
+  /* A phone has the room for one picker and nothing else, so here it does take
+     the row. Named through the row for the same reason as above. */
+  .library-roulette-setup .episode-roulette-scope {
+    flex: 1 1 0;
     min-width: 0;
   }
-  .episode-roulette-scope select {
+  .library-roulette-setup .episode-roulette-scope select {
     width: 100%;
     min-width: 0;
   }
@@ -6108,6 +6192,33 @@ body.is-locked {
   background: var(--panel-soft);
   border: 1px solid var(--panel-border);
   border-radius: 10px;
+}
+/* What the numbers above mean, and the way back to the defaults, on one line
+   under them. */
+.setting-grid-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-top: 12px;
+}
+.setting-grid-footer small {
+  color: #87919b;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.setting-grid-footer button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+}
+@media (max-width: 560px) {
+  .setting-grid-footer {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
 }
 .setting-text-row {
   grid-template-columns: minmax(0, 1fr) minmax(220px, 38%);

@@ -962,6 +962,12 @@ export function Details({
    */
   function playFresh(stream: Stream, video?: Video, player?: ExternalPlayerMode) {
     saveStreamLink(reuseKey(video), stream);
+    // The sheet has done its job, so it goes now rather than waiting behind the
+    // player: leaving playback used to land back on the list you had just
+    // chosen from, which is a step forward dressed as a step back. Behind the
+    // player is the page you came from — this title, or the home page you
+    // continued from.
+    closeSource();
     onPlay(stream, meta, video, player);
   }
 

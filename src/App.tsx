@@ -186,6 +186,11 @@ import { readDebridRules } from "./lib/webSettings";
 import { applyDebridStreamSettings } from "./lib/debridStreams";
 import {
   readWebSettings,
+  POSTER_DEFAULTS,
+  POSTER_SCALE_MAX,
+  POSTER_SCALE_MIN,
+  posterScale,
+  posterSizeAt,
   type ContinueWatchingSettings,
   type PosterSettings,
   type WebSettings,
@@ -616,7 +621,36 @@ export function App() {
      * a single stream without changing what the next one uses.
      */
     mode?: ExternalPlayerMode;
+    /**
+     * Where to resume, when the launch knows better than the saved progress
+     * does. Swapping release mid-episode is the case: playback is seconds
+     * ahead of the last write, and restarting from that write would visibly
+     * step backwards.
+     */
+    resumeMs?: number;
   } | null>(null);
+  /**
+   * The other releases of whatever is playing, for the player's own picker.
+   *
+   * Held here rather than in the sources sheet: playback is reached from the
+   * sheet, from Continue Watching and from a remembered link, and only the
+   * first of those ever had a list. Fetched when the picker is first opened,
+   * which for most playback is never.
+   */
+  const [playerSources, setPlayerSources] = useState<Stream[]>([]);
+  const [playerSourcesBusy, setPlayerSourcesBusy] = useState(false);
+  const playerSourceRequest = useRef(0);
+  // Read by the picker's fetch, which must not be rebuilt every time playback
+  // state changes underneath it.
+  const playbackRef = useRef(playback);
+  playbackRef.current = playback;
+  // A different episode is a different set of releases, so what was fetched
+  // for the last one is dropped rather than offered for this one.
+  useEffect(() => {
+    playerSourceRequest.current += 1;
+    setPlayerSources([]);
+    setPlayerSourcesBusy(false);
+  }, [playback?.meta.id, playback?.video?.id]);
   const [loading, setLoading] = useState(false);
   const [resolvingContinue, setResolvingContinue] = useState<Meta | null>(null);
   useScrollLock(resolvingContinue !== null);
@@ -1997,6 +2031,40 @@ export function App() {
     setSelected(item);
   }, []);
 
+  /**
+   * Asks every addon for the releases of what is playing.
+   *
+   * Ordered the way the sources sheet orders them, so the picker in the player
+   * lists the same things in the same order as the sheet it stands in for.
+   * Batches are shown as they land rather than at the end: one slow addon
+   * should not decide how long the menu sits empty.
+   */
+  const loadPlayerSources = useCallback(() => {
+    const current = playbackRef.current;
+    if (!current) return;
+    const request = ++playerSourceRequest.current;
+    setPlayerSources([]);
+    setPlayerSourcesBusy(true);
+    const order = (streams: Stream[]) =>
+      platform.debrid ? applyDebridStreamSettings(streams, debridRules) : streams;
+    void loadStreams(
+      current.meta.type,
+      current.video?.id || current.meta.id,
+      addons,
+      undefined,
+      (_name, _batch, ordered) => {
+        if (request === playerSourceRequest.current) setPlayerSources(order(ordered));
+      },
+    )
+      .then((streams) => {
+        if (request === playerSourceRequest.current) setPlayerSources(order(streams));
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (request === playerSourceRequest.current) setPlayerSourcesBusy(false);
+      });
+  }, [addons, debridRules]);
+
   const openContinueSources = useCallback(
     (card: ContinueCard, startAtBeginning: boolean) => {
       // Claimed before anything else, so tapping a second card supersedes the
@@ -2569,12 +2637,28 @@ export function App() {
           tmdbConfig={metadataEnrichment.tmdb}
           animeSkipClientId={providerCredential(providerCredentials, "animeskip", "client_id")}
           startPositionMs={
-            playback.startAtBeginning
-              ? 0
-              : resumePositionMs(playback.meta, playback.video)
+            playback.resumeMs != null
+              ? playback.resumeMs
+              : playback.startAtBeginning
+                ? 0
+                : resumePositionMs(playback.meta, playback.video)
           }
           episodes={playback.meta.videos}
           watchIndex={watchIndex}
+          sources={playerSources}
+          sourcesBusy={playerSourcesBusy}
+          onRequestSources={loadPlayerSources}
+          onSelectSource={(next, positionMs) => {
+            // Same title, same episode, different file — so the only things
+            // that change are the release and where it starts.
+            rememberBingeGroup(playback.meta.id, next.behaviorHints?.bingeGroup);
+            setPlayback({
+              ...playback,
+              stream: next,
+              startAtBeginning: false,
+              resumeMs: positionMs,
+            });
+          }}
           onPlayEpisode={(next) => {
             // The same source, not a fresh choice. A binge group names a
             // release that serves a whole run, so continuing within it keeps
@@ -4013,6 +4097,75 @@ function UpdateRow() {
   );
 }
 
+/**
+ * A number you can actually type into.
+ *
+ * The settings these edit are clamped to a range on the way in, so a plain
+ * controlled input fought every keystroke: clearing 126 to type 90 left an
+ * empty field, which read as 0, which clamped to the minimum and put 88 in the
+ * box before the second digit arrived. What you saw was the number jumping
+ * about on its own.
+ *
+ * So what is typed is held as text and only committed when it is a number the
+ * setting will accept, and the field is squared up against the setting when
+ * focus leaves — an empty or out-of-range box returns to the stored value
+ * rather than silently becoming a different one.
+ */
+function NumberField({
+  label,
+  value,
+  min,
+  max,
+  step = 1,
+  disabled,
+  onCommit,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  disabled?: boolean;
+  onCommit(next: number): void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  const [editing, setEditing] = useState(false);
+  // While it has focus the box is the author of its own contents; outside that
+  // it follows the setting, which a reset or another device can change.
+  if (!editing && draft !== String(value)) setDraft(String(value));
+  return (
+    <label>
+      <span>{label}</span>
+      <input
+        type="number"
+        inputMode="numeric"
+        min={min}
+        max={max}
+        step={step}
+        value={draft}
+        disabled={disabled}
+        onFocus={() => setEditing(true)}
+        onChange={(event) => {
+          const next = event.target.value;
+          setDraft(next);
+          const parsed = Number(next);
+          if (
+            next.trim() !== "" &&
+            Number.isFinite(parsed) &&
+            parsed >= min &&
+            parsed <= max
+          )
+            onCommit(parsed);
+        }}
+        onBlur={() => {
+          setEditing(false);
+          setDraft(String(value));
+        }}
+      />
+    </label>
+  );
+}
+
 function SettingToggle({
   title,
   description,
@@ -4919,46 +5072,48 @@ function SettingsPage({
             <option value="TopBar">Top bar</option>
           </select>
         </label>
+        {/* One size rather than a width and a height. Two free numbers let a
+            card be any shape at all, and a poster that is not 2:3 crops its
+            artwork; what anyone actually wants here is bigger or smaller
+            cards. */}
         <div className="setting-grid">
-          <label>
-            <span>Poster width</span>
-            <input
-              type="number"
-              min="88"
-              max="260"
-              value={settings.poster.widthDp}
-              disabled={!settingsReady}
-              onChange={(event) =>
-                onPosterSetting({ widthDp: Number(event.target.value) })
-              }
-            />
-          </label>
-          <label>
-            <span>Poster height</span>
-            <input
-              type="number"
-              min="112"
-              max="390"
-              value={settings.poster.heightDp}
-              disabled={!settingsReady}
-              onChange={(event) =>
-                onPosterSetting({ heightDp: Number(event.target.value) })
-              }
-            />
-          </label>
-          <label>
-            <span>Corner radius</span>
-            <input
-              type="number"
-              min="0"
-              max="40"
-              value={settings.poster.cornerRadiusDp}
-              disabled={!settingsReady}
-              onChange={(event) =>
-                onPosterSetting({ cornerRadiusDp: Number(event.target.value) })
-              }
-            />
-          </label>
+          <NumberField
+            label="Poster size (%)"
+            min={POSTER_SCALE_MIN}
+            max={POSTER_SCALE_MAX}
+            step={5}
+            value={posterScale(settings.poster)}
+            disabled={!settingsReady}
+            onCommit={(percent) => onPosterSetting(posterSizeAt(percent))}
+          />
+          <NumberField
+            label="Corner radius (px)"
+            min={0}
+            max={40}
+            value={settings.poster.cornerRadiusDp}
+            disabled={!settingsReady}
+            onCommit={(cornerRadiusDp) => onPosterSetting({ cornerRadiusDp })}
+          />
+        </div>
+        <div className="setting-grid-footer">
+          <small>
+            Scales the card from {POSTER_DEFAULTS.widthDp} ×{" "}
+            {POSTER_DEFAULTS.heightDp}, so posters keep their shape.
+          </small>
+          <button
+            type="button"
+            className="secondary"
+            disabled={!settingsReady}
+            onClick={() =>
+              onPosterSetting({
+                widthDp: POSTER_DEFAULTS.widthDp,
+                heightDp: POSTER_DEFAULTS.heightDp,
+                cornerRadiusDp: POSTER_DEFAULTS.cornerRadiusDp,
+              })
+            }
+          >
+            <RotateCcw size={15} /> Reset
+          </button>
         </div>
         <SettingToggle
           title={t("toggle.landscapeCards.title")}

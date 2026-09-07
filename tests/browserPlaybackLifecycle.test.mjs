@@ -104,6 +104,35 @@ test('the player borrows the episodes panel palette rather than a second one', (
   assert.match(component, /loadEpisodeRatings\(tmdbId\)/);
 });
 
+test('the player can swap release without going back to the sheet', () => {
+  const component = readFileSync(
+    new URL("../src/components/Player.tsx", import.meta.url),
+    "utf8",
+  );
+  const app = readFileSync(
+    new URL("../src/App.tsx", import.meta.url),
+    "utf8",
+  );
+  const details = readFileSync(
+    new URL("../src/components/Details.tsx", import.meta.url),
+    "utf8",
+  );
+
+  // The list is asked for on the first look, not with every stream.
+  assert.match(component, /if \(!sourcesOpen && !sources\?\.length\) onRequestSources\?\.\(\)/);
+  // What is playing is named, and its own row cannot be chosen again.
+  assert.match(component, /sourceKey\(item\) === sourceKey\(stream\)/);
+  assert.match(component, /source-menu-current/);
+  // The position goes with the swap, so it resumes rather than restarts.
+  assert.match(component, /onSelectSource\?\.\(next, Math\.max\(0, Math\.round\(currentTimeRef\.current \* 1000\)\)\)/);
+  assert.match(app, /resumeMs: positionMs/);
+  assert.match(app, /playback\.resumeMs != null/);
+
+  // And leaving playback lands on the page you came from: the sheet closes
+  // when a source is chosen rather than waiting behind the player.
+  assert.match(details, /closeSource\(\);\s*\n\s*onPlay\(stream, meta, video, player\)/);
+});
+
 test('the experimental Movi player is no longer shipped or selectable', () => {
   const component = readFileSync(
     new URL("../src/components/Player.tsx", import.meta.url),

@@ -34,6 +34,7 @@ import {
   Info,
   ExternalLink,
   FastForward,
+  Layers,
   List,
   LoaderCircle,
   Captions,
@@ -186,6 +187,34 @@ function handoffOptions() {
     .filter((option) => option.mode !== "native");
 }
 
+/**
+ * What makes two entries the same release.
+ *
+ * The list the picker shows is fetched separately from the one the stream was
+ * chosen out of, so they are never the same objects. The link is what actually
+ * identifies a file; an addon that hands back a magnet or a debrid job rather
+ * than a URL is matched on what it called it instead.
+ */
+function sourceKey(item: Stream) {
+  return (
+    item.url ||
+    item.externalUrl ||
+    item.infoHash ||
+    `${item.addonName}:${item.title || item.name}`
+  );
+}
+
+/** The release name an addon put on a source, as the sheet shows it. */
+function sourceLabel(item: Stream) {
+  return (
+    item.title ||
+    item.description ||
+    item.behaviorHints?.filename ||
+    item.name ||
+    item.addonName
+  );
+}
+
 export type PlayerProps = {
   stream: Stream;
   meta: Meta;
@@ -203,6 +232,13 @@ export type PlayerProps = {
   episodeCardStyle?: "horizontal" | "list";
   /** Resolves the show's TMDB id, which is what the ratings service is keyed by. */
   tmdbConfig?: MetadataEnrichmentConfig["tmdb"];
+  /** Other releases of what is playing, once something has gone and asked. */
+  sources?: Stream[];
+  sourcesBusy?: boolean;
+  /** Asked for when the picker is first opened, not before. */
+  onRequestSources?(): void;
+  /** @param positionMs where playback is now, so the swap resumes there. */
+  onSelectSource?(next: Stream, positionMs: number): void;
   animeSkipClientId?: string;
   watchIndex?: WatchIndex;
   mode?: ExternalPlayerMode;
@@ -232,6 +268,10 @@ export function Player({
   blurUnwatchedEpisodes = false,
   episodeCardStyle = "horizontal",
   tmdbConfig,
+  sources,
+  sourcesBusy = false,
+  onRequestSources,
+  onSelectSource,
   animeSkipClientId = "",
   mode,
 }: PlayerProps) {
@@ -277,6 +317,9 @@ export function Player({
     return () => window.clearTimeout(timer);
   }, [warning]);
   const [currentTime, setCurrentTime] = useState(0);
+  /** Read by callbacks that must not be rebuilt on every tick of the clock. */
+  const currentTimeRef = useRef(0);
+  currentTimeRef.current = currentTime;
   const [duration, setDuration] = useState(0);
   const [seekPreview, setSeekPreview] = useState<number | null>(null);
   const seekPreviewRef = useRef<number | null>(null);
@@ -332,6 +375,7 @@ export function Player({
   /** mpv's own convention: -1, or "no", means subtitles are off. */
   const [selectedSubtitle, setSelectedSubtitle] = useState(-1);
   const [externalPlayerOpen, setExternalPlayerOpen] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   const [episodesOpen, setEpisodesOpen] = useState(false);
   /** Dismissed by hand, so it does not come back for the rest of the episode. */
   const [nextDismissed, setNextDismissed] = useState(false);
@@ -561,6 +605,7 @@ export function Player({
         setAudioOpen(false);
         setSubsOpen(false);
         setExternalPlayerOpen(false);
+        setSourcesOpen(false);
         setPlaybackMenuOpen(false);
         setControlsVisible(false);
       }, 3000);
@@ -1735,6 +1780,31 @@ export function Player({
     [onPlayEpisode, switching, video?.id],
   );
 
+  /**
+   * Swaps the release without leaving playback.
+   *
+   * Same episode, different file: a host that has stalled, a track in a
+   * language this one does not carry, a size that suits the connection better.
+   * The position goes with it, so the swap picks up where the picture was
+   * rather than at the top of the file.
+   */
+  const startSource = useCallback(
+    (next: Stream) => {
+      if (closingRef.current || switching || sourceKey(next) === sourceKey(stream))
+        return;
+      if (nativePlayer) void nativeSessionRef.current?.stop().catch(() => undefined);
+      engineRef.current?.pause();
+      videoRef.current?.pause();
+      setPlaying(false);
+      setWaiting(true);
+      setStatus("Switching source…");
+      setSwitching(true);
+      setSourcesOpen(false);
+      onSelectSource?.(next, Math.max(0, Math.round(currentTimeRef.current * 1000)));
+    },
+    [onSelectSource, switching, stream],
+  );
+
   const closePlayer = useCallback(async () => {
     if (closingRef.current) return;
     closingRef.current = true;
@@ -2016,6 +2086,7 @@ export function Player({
                     setAudioOpen(false);
                     setSubsOpen(false);
                     setExternalPlayerOpen(false);
+                    setSourcesOpen(false);
                     setPlaybackMenuOpen((value) => !value);
                   }}
                 >
@@ -2087,6 +2158,7 @@ export function Player({
                   onClick={() => {
                     setPlaybackMenuOpen(false);
                     setExternalPlayerOpen(false);
+                    setSourcesOpen(false);
                     setAudioOpen(false);
                     setSubsOpen((value) => !value);
                   }}
@@ -2129,6 +2201,7 @@ export function Player({
                 onClick={() => {
                   setPlaybackMenuOpen(false);
                   setExternalPlayerOpen(false);
+                  setSourcesOpen(false);
                   setSubsOpen(false);
                   setAudioOpen((value) => !value);
                 }}
@@ -2175,6 +2248,7 @@ export function Player({
                   onClick={() => {
                     setPlaybackMenuOpen(false);
                     setAudioOpen(false);
+                    setSourcesOpen(false);
                     setExternalPlayerOpen((value) => !value);
                   }}
                 >
@@ -2195,6 +2269,70 @@ export function Player({
                 )}
               </div>
             )}
+            {/* Swapping release without going back to the sheet: only offered
+                where the app can actually resolve another one. */}
+            {onSelectSource && (
+              <div className="audio-picker">
+                <button
+                  aria-label="Sources"
+                  title="Sources"
+                  className={sourcesOpen ? "active" : ""}
+                  aria-expanded={sourcesOpen}
+                  onClick={() => {
+                    setPlaybackMenuOpen(false);
+                    setAudioOpen(false);
+                    setSubsOpen(false);
+                    setExternalPlayerOpen(false);
+                    setEpisodesOpen(false);
+                    // Asked for on the first look rather than with every
+                    // stream: most playback never opens this.
+                    if (!sourcesOpen && !sources?.length) onRequestSources?.();
+                    setSourcesOpen((value) => !value);
+                  }}
+                >
+                  <Layers />
+                </button>
+                {sourcesOpen && (
+                  <div className="audio-menu source-menu">
+                    <strong>Sources</strong>
+                    {/* What is playing, named — the list below is long and the
+                        row it matches is often scrolled out of sight. */}
+                    <div className="source-menu-current">
+                      <small>Playing</small>
+                      <span>{sourceLabel(stream)}</span>
+                      <small>{stream.addonName}</small>
+                    </div>
+                    {sources?.map((item) => {
+                      const current = sourceKey(item) === sourceKey(stream);
+                      return (
+                        <button
+                          key={sourceKey(item)}
+                          className={current ? "selected" : ""}
+                          disabled={current || switching}
+                          onClick={() => startSource(item)}
+                        >
+                          <span>{sourceLabel(item)}</span>
+                          <small>
+                            {item.name || item.addonName}
+                            {item.addonName && item.name
+                              ? ` · ${item.addonName}`
+                              : ""}
+                          </small>
+                        </button>
+                      );
+                    })}
+                    {sourcesBusy && (
+                      <p className="source-menu-busy">
+                        <LoaderCircle className="spin" /> Asking addons…
+                      </p>
+                    )}
+                    {!sourcesBusy && !sources?.length && (
+                      <p>No other releases came back for this.</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             {!!episodes?.length && onPlayEpisode && (
               <button
                 aria-label={t("player.episodes")}
@@ -2204,6 +2342,7 @@ export function Player({
                   setPlaybackMenuOpen(false);
                   setAudioOpen(false);
                   setExternalPlayerOpen(false);
+                  setSourcesOpen(false);
                   setEpisodesOpen((value) => !value);
                 }}
               >
