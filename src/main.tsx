@@ -3,26 +3,22 @@ import { createRoot } from "react-dom/client";
 import { registerSW } from "virtual:pwa-register";
 import { App } from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-import { setRegistration, setUpdateHandler } from "./lib/appUpdate";
+import { reloadForUpdateWhenSafe, setRegistration } from "./lib/appUpdate";
 import { applyStoredLanguage } from "./lib/i18n.ts";
 import { lockZoom } from "./lib/lockZoom";
 import "./styles.css";
 
-const updateSW = import.meta.env.PROD
-  ? registerSW({
-      immediate: true,
-      onRegisteredSW(_url, registration) {
-        // Kept so Settings can trigger an update check on demand.
-        setRegistration(registration ?? null);
-      },
-      onNeedRefresh() {
-        // Held until the user asks for it, so a deploy never interrupts playback.
-        setUpdateHandler(async () => {
-          await updateSW(true);
-        });
-      },
-    })
-  : async () => undefined;
+if (import.meta.env.PROD) {
+  registerSW({
+    immediate: true,
+    onRegisteredSW(_url, registration) {
+      setRegistration(registration ?? null);
+    },
+    onNeedReload() {
+      reloadForUpdateWhenSafe();
+    },
+  });
+}
 
 // A previously installed production PWA can otherwise keep intercepting the
 // same LAN dev URL and make an iPhone look as though it is still running an old

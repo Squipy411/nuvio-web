@@ -1,18 +1,6 @@
-/**
- * Bridges the service-worker registration in main.tsx to the UI.
- *
- * `registerType: "autoUpdate"` called `location.reload()` the moment a new
- * worker took control. On any visit that found a new build that meant: boot,
- * paint the splash, reload, paint the splash again — the double "Restoring
- * Nuvio…". The update is now surfaced instead of applied mid-boot.
- */
-type Listener = () => void;
-
-let apply: (() => Promise<void>) | null = null;
-let ready = false;
+/** Bridges service-worker updates to Settings and safe application reloads. */
 let registration: ServiceWorkerRegistration | null = null;
-const listeners = new Set<Listener>();
-let suppressPromptUntil = 0;
+let reloadObserver: MutationObserver | null = null;
 
 export function setRegistration(value: ServiceWorkerRegistration | null): void {
   registration = value;
@@ -22,8 +10,8 @@ export type UpdateCheck = "pending" | "current" | "unsupported";
 
 /**
  * Asks the browser to re-fetch the worker script now, rather than waiting for
- * its own periodic check. A pending worker means a new build is waiting, and
- * `onNeedRefresh` will have raised the reload prompt.
+ * its own periodic check. A pending worker can still exist briefly while an
+ * automatically installed build is taking control.
  */
 async function waitForInstallation(active: ServiceWorkerRegistration) {
   const worker = active.installing;
@@ -44,10 +32,7 @@ async function waitForInstallation(active: ServiceWorkerRegistration) {
   });
 }
 
-export async function checkForUpdate({
-  prompt = true,
-}: { prompt?: boolean } = {}): Promise<UpdateCheck> {
-  if (!prompt) suppressPromptUntil = Date.now() + 30_000;
+export async function checkForUpdate(): Promise<UpdateCheck> {
   const active =
     registration ??
     (await navigator.serviceWorker?.getRegistration().catch(() => null)) ??
@@ -60,26 +45,36 @@ export async function checkForUpdate({
   } catch {
     return "unsupported";
   }
-  return active.waiting || ready ? "pending" : "current";
+  return active.waiting ? "pending" : "current";
 }
-
-export function setUpdateHandler(handler: () => Promise<void>): void {
-  apply = handler;
-  ready = true;
-  if (Date.now() >= suppressPromptUntil) {
-    for (const listener of listeners) listener();
-  }
-}
-
-export function subscribeUpdate(listener: Listener): () => void {
-  listeners.add(listener);
-  return () => listeners.delete(listener);
-}
-
-export const updateReady = () => ready;
 
 /**
- * Activates the waiting worker and reloads.
+ * The auto-update worker already owns the newest cache when this is called.
+ * Reload immediately during ordinary browsing, but leave a playing video
+ * alone and reload as soon as its player view is actually removed.
+ */
+export function reloadForUpdateWhenSafe(): void {
+  const playerOpen = () => document.querySelector(".player-view") !== null;
+  if (!playerOpen()) {
+    window.location.reload();
+    return;
+  }
+  if (reloadObserver) return;
+  reloadObserver = new MutationObserver(() => {
+    if (playerOpen()) return;
+    reloadObserver?.disconnect();
+    reloadObserver = null;
+    window.location.reload();
+  });
+  reloadObserver.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
+}
+
+/**
+ * Activates a waiting worker and reloads. This remains available to the
+ * Settings check as a recovery path for an older prompt-style registration.
  *
  * Driven directly rather than left to the plugin's helper: that helper is a
  * no-op when it cannot find a waiting worker, which left the Reload button
@@ -98,7 +93,6 @@ export async function applyUpdate(): Promise<void> {
       once: true,
     });
     active?.waiting?.postMessage({ type: "SKIP_WAITING" });
-    await apply?.();
   } catch {
     // Ignored: the timer below still reloads.
   }

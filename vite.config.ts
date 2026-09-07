@@ -78,9 +78,10 @@ export default defineConfig(({ mode }) => {
         // every later change appeared not to apply. The plan says not to port
         // the service worker; this is where that is enforced.
         disable: !!platformModule,
-        // "prompt", not "autoUpdate": autoUpdate reloads the page as soon as a
-        // new worker takes control, which restarted the app mid-boot.
-        registerType: "prompt",
+        // Install new builds without asking the user to manage the worker.
+        // main.tsx owns the reload callback so an active stream is never cut
+        // off merely because a deployment finished in the background.
+        registerType: "autoUpdate",
         includeAssets: [
           "app-icon-1024.png",
           "Nuvio-icon.png",

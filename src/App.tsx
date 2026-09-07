@@ -109,8 +109,6 @@ import {
 import {
   applyUpdate,
   checkForUpdate,
-  subscribeUpdate,
-  updateReady,
 } from "./lib/appUpdate";
 import {
   LOCALES,
@@ -720,15 +718,6 @@ export function App() {
   // and touching it during render would make search history a layout cost.
   const [recentSearches, setRecentSearches] = useState<string[]>(readRecentSearches);
   const [searchFocused, setSearchFocused] = useState(false);
-  const [hasUpdate, setHasUpdate] = useState(updateReady);
-  useEffect(() => subscribeUpdate(() => setHasUpdate(true)), []);
-  // Ask once at startup rather than waiting for the browser's own schedule,
-  // which can be hours — long enough to keep running a build you replaced.
-  useEffect(() => {
-    void checkForUpdate({ prompt: true }).then((result) => {
-      if (result === "pending") setHasUpdate(true);
-    });
-  }, []);
   const activateProfile = useCallback((next: Profile | null) => {
     episodeSwitch.current += 1;
     setResolvingContinue(null);
@@ -2178,22 +2167,10 @@ export function App() {
       webSettings.continueWatching,
     ],
   );
-  const updatePrompt = hasUpdate ? (
-    <UpdateModal onLater={() => setHasUpdate(false)} />
-  ) : null;
   if (booting)
-    return (
-      <>
-        {updatePrompt}
-      </>
-    );
+    return null;
   if (!session)
-    return (
-      <>
-        <AuthScreen onSession={setSession} />
-        {updatePrompt}
-      </>
-    );
+    return <AuthScreen onSession={setSession} />;
   // Signed in but nobody chosen yet: the picker, and nothing else. A PIN
   // prompt on its own counts as chosen-but-locked, so it takes precedence.
   if (!profile && !pinTarget)
@@ -2272,7 +2249,6 @@ export function App() {
             </div>
           </div>
         )}
-        {updatePrompt}
       </>
     );
 
@@ -2294,7 +2270,6 @@ export function App() {
             openDetails(item);
           }}
         />
-        {updatePrompt}
       </>
     );
 
@@ -2572,7 +2547,6 @@ export function App() {
           />
         )}
       </main>
-      {updatePrompt}
       <nav
         className="bottom-nav"
         style={
@@ -3949,52 +3923,6 @@ function AddonSettings({
   );
 }
 /**
- * Manual update check. The worker only polls on its own schedule, which can be
- * hours; this asks immediately. A found update raises the usual reload prompt
- * rather than restarting the app from under you.
- */
-function UpdateModal({ onLater }: { onLater(): void }) {
-  const [applying, setApplying] = useState(false);
-  return (
-    <div className="update-modal-backdrop" role="presentation">
-      <section
-        className="update-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="update-modal-title"
-      >
-        <span className="update-modal-icon">
-          <RefreshCw />
-        </span>
-        <div>
-          <h2 id="update-modal-title">Nuvio Web update ready</h2>
-          <p>
-            Install the latest version now. The page will reload automatically
-            when it is ready.
-          </p>
-        </div>
-        <div className="update-modal-actions">
-          <button className="secondary" disabled={applying} onClick={onLater}>
-            Later
-          </button>
-          <button
-            className="primary"
-            disabled={applying}
-            onClick={() => {
-              setApplying(true);
-              void applyUpdate();
-            }}
-          >
-            <RefreshCw size={17} className={applying ? "spin-icon" : ""} />
-            {applying ? "Updating…" : "Update now"}
-          </button>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-/**
  * One control, two mechanisms.
  *
  * A browser update is the service worker's: fetch the new bundle, reload. A
@@ -4006,7 +3934,7 @@ function UpdateRow() {
   const shell = platform.updates;
   const [state, setState] = useState<
     "idle" | "checking" | "current" | "pending" | "installing" | "restart"
-  >(!shell && updateReady() ? "pending" : "idle");
+  >("idle");
   const [version, setVersion] = useState("");
   const [available, setAvailable] = useState("");
   /** 0..1, or -1 where the feed declared no length. */
@@ -4050,7 +3978,7 @@ function UpdateRow() {
         return;
       }
       setState("checking");
-      const result = await checkForUpdate({ prompt: false });
+      const result = await checkForUpdate();
       setState(result === "pending" ? "pending" : "current");
       return;
     }
