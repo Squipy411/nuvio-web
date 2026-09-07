@@ -528,8 +528,8 @@ export function App() {
     // first player this device can actually use is a better start than a
     // setting that silently means nothing.
     if (canPlayInApp()) return "internal";
-    // Movi is an experiment, not the new recommendation. Outplayer remains
-    // the reliable first choice on iOS unless the viewer explicitly changes it.
+    // Outplayer remains the reliable first choice on iOS unless the viewer
+    // explicitly changes it.
     if (isAppleMobile() && platform.externalPlayer.isAvailable("outplayer"))
       return "outplayer";
     return platform.externalPlayer.options("settings")[0]?.mode ?? "copy";
@@ -5226,7 +5226,7 @@ function SettingsPage({
               {isAndroid()
                 ? "Next Player, VLC, MX Player, mpv, and the Android video player chooser open through Android intents."
                 : isAppleMobile()
-                  ? "Outplayer, VLC, and Infuse open as iOS apps. Movi Player is an experimental in-app WebCodecs/WASM player with its own controls."
+                  ? "Outplayer, VLC, and Infuse open as iOS apps."
                   : isMacOS()
                     ? "Infuse and IINA open through macOS URL schemes. VLC registers none on a Mac, so copy the link for it."
                     : "mpv opens through the mpv-handler helper, which has to be installed separately. Otherwise copy the link for your player."}

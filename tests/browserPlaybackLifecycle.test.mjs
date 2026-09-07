@@ -21,6 +21,55 @@ test('silent video has an advancing wall clock rather than waiting forever for a
   assert.equal(p.currentTime, paused);
 });
 
+test('decoded playback clock follows the selected speed', () => {
+  const p = player();
+  p.setPlaybackRate(2);
+  p.playing = true;
+  p.startedFrom = 10;
+  p.contextStartTime = performance.now() / 1000 - 2;
+  assert.ok(p.currentTime >= 14);
+  p.pause();
+});
+
+test('web player exposes real speed, stable-volume, HDR, and surface controls', () => {
+  const component = readFileSync(
+    new URL("../src/components/Player.tsx", import.meta.url),
+    "utf8",
+  );
+  const engine = readFileSync(
+    new URL("../src/lib/mediabunnyPlayer.ts", import.meta.url),
+    "utf8",
+  );
+  const styles = readFileSync(
+    new URL("../src/styles.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(component, /0\.25, 0\.5, 0\.75, 1, 1\.25, 1\.5, 1\.75, 2/);
+  assert.match(component, /element\.preservesPitch = true/);
+  assert.match(component, /engine\.setStableVolume\(stableVolume\)/);
+  assert.match(component, /CSS\.supports\("dynamic-range-limit", "standard"\)/);
+  assert.match(component, /onClick=\{handleSurfaceClick\}/);
+  assert.match(component, /playing \? <SolidPause \/> : <SolidPlay \/>/);
+  assert.match(engine, /createDynamicsCompressor\(\)/);
+  assert.match(engine, /node\.playbackRate\.value = this\.playbackRate/);
+  assert.match(styles, /dynamic-range-limit: standard/);
+  assert.match(styles, /\.player-center \{[\s\S]*background: #080808e8/);
+});
+
+test('the experimental Movi player is no longer shipped or selectable', () => {
+  const component = readFileSync(
+    new URL("../src/components/Player.tsx", import.meta.url),
+    "utf8",
+  );
+  const packageJson = readFileSync(
+    new URL("../package.json", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(component, /movi-player|MoviPlayer/);
+  assert.doesNotMatch(packageJson, /movi-player/);
+});
+
 test('stopped startup cannot continue into another stage', async () => {
   const p = player();
   const pending = deferred();
@@ -197,34 +246,4 @@ test("iOS is not offered Nuvio's legacy in-app player, by one decision", () => {
     /https\?:/i,
     "and downloads, which are local and play fine, must not be caught by it",
   );
-});
-
-test("Movi is an explicit experimental browser player and Outplayer stays the iOS default", () => {
-  const helpers = readFileSync(
-    new URL("../src/lib/externalPlayer.ts", import.meta.url),
-    "utf8",
-  );
-  assert.match(
-    helpers,
-    /mode: "movi",[\s\S]*?label: "Movi Player \(Experimental\)"[\s\S]*?settings: \["apple-mobile", "macos", "desktop"\]/,
-    "Movi should be visible in iOS and desktop browsers without reviving the retired Nuvio canvas option",
-  );
-  assert.match(
-    helpers,
-    /mode === "internal" \|\| mode === "native" \|\| mode === "movi"/,
-    "Movi must render here instead of being launched as an external URL scheme",
-  );
-  const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
-  assert.match(
-    app,
-    /isAppleMobile\(\) && platform\.externalPlayer\.isAvailable\("outplayer"\)/,
-    "the experiment must not silently replace the reliable iOS default",
-  );
-  const player = readFileSync(
-    new URL("../src/components/Player.tsx", import.meta.url),
-    "utf8",
-  );
-  assert.match(player, /import\("movi-player\/react\/slim"\)/, "the engine should load only when selected");
-  assert.match(player, /props\.mode === "movi"/, "the selected mode needs its own surface");
-  assert.match(player, /titlemode="both back"/, "Movi's own title and back UI should be enabled");
 });

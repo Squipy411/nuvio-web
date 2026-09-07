@@ -277,8 +277,6 @@ export type ExternalPlayerMode =
    * audio the platform plays perfectly well through a video element.
    */
   | "native"
-  /** Movi Player's self-contained WebCodecs/WASM player and controls. */
-  | "movi"
   | "copy"
   | "vlc"
   | "nextplayer"

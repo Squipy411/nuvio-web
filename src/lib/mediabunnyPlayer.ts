@@ -245,6 +245,7 @@ export class MediabunnyPlayer {
   private audioSink: AudioBufferSink | null = null;
   private context: AudioContext | null = null;
   private gain: GainNode | null = null;
+  private compressor: DynamicsCompressorNode | null = null;
 
   private stopped = false;
   private playing = false;
@@ -258,6 +259,8 @@ export class MediabunnyPlayer {
   private startedFrom = 0;
   private volume = 1;
   private muted = false;
+  private stableVolume = false;
+  private playbackRate = 1;
 
   duration = 0;
 
@@ -284,7 +287,10 @@ export class MediabunnyPlayer {
 
   get currentTime() {
     if (!this.playing) return this.pausedAt;
-    return this.startedFrom + (this.clockTime() - this.contextStartTime);
+    return (
+      this.startedFrom +
+      (this.clockTime() - this.contextStartTime) * this.playbackRate
+    );
   }
 
   private clockTime() {
@@ -555,7 +561,13 @@ export class MediabunnyPlayer {
     this.assertActive();
     this.context = new AudioContextClass({ sampleRate });
     this.gain = this.context.createGain();
-    this.gain.connect(this.context.destination);
+    this.compressor = this.context.createDynamicsCompressor();
+    this.compressor.threshold.value = -24;
+    this.compressor.knee.value = 18;
+    this.compressor.ratio.value = 4;
+    this.compressor.attack.value = 0.003;
+    this.compressor.release.value = 0.25;
+    this.connectAudioOutput();
     this.applyVolume();
     this.audioSink = new AudioBufferSink(this.audioTrack);
   }
@@ -700,6 +712,7 @@ export class MediabunnyPlayer {
     await this.context?.close().catch(() => undefined);
     this.context = null;
     this.gain = null;
+    this.compressor = null;
     this.audioSink = null;
     if (this.audioTrack) await this.openAudio();
     else this.report("buffering", "That track cannot be decoded here.");
@@ -717,6 +730,27 @@ export class MediabunnyPlayer {
   setMuted(value: boolean) {
     this.muted = value;
     this.applyVolume();
+  }
+
+  setStableVolume(value: boolean) {
+    this.stableVolume = value;
+    this.connectAudioOutput();
+  }
+
+  setPlaybackRate(value: number) {
+    const next = Math.max(0.25, Math.min(2, value));
+    if (next === this.playbackRate) return;
+    // Capture the position using the old rate before changing the clock.
+    const position = this.currentTime;
+    const wasPlaying = this.playing;
+    if (wasPlaying) {
+      this.playing = false;
+      this.generation += 1;
+      this.silence();
+    }
+    this.pausedAt = position;
+    this.playbackRate = next;
+    if (wasPlaying) void this.play();
   }
 
   stop() {
@@ -737,6 +771,18 @@ export class MediabunnyPlayer {
     if (this.gain)
       // Quadratic, because loudness is not linear in the slider's travel.
       this.gain.gain.value = this.muted ? 0 : this.volume ** 2;
+  }
+
+  private connectAudioOutput() {
+    if (!this.gain || !this.context) return;
+    this.gain.disconnect();
+    this.compressor?.disconnect();
+    if (this.stableVolume && this.compressor) {
+      this.gain.connect(this.compressor);
+      this.compressor.connect(this.context.destination);
+    } else {
+      this.gain.connect(this.context.destination);
+    }
   }
 
   private silence() {
@@ -844,14 +890,21 @@ export class MediabunnyPlayer {
       if (this.generation !== generation || this.stopped) return;
       const node = context.createBufferSource();
       node.buffer = downmixToStereo(buffer, context);
+      node.playbackRate.value = this.playbackRate;
       node.connect(this.gain);
 
-      let at = this.contextStartTime + timestamp - this.startedFrom;
+      let at =
+        this.contextStartTime +
+        (timestamp - this.startedFrom) / this.playbackRate;
       // Rounded to a sample boundary, or consecutive buffers land fractionally
       // apart and click.
       at = Math.round(context.sampleRate * at) / context.sampleRate;
       if (at >= context.currentTime) node.start(at);
-      else node.start(context.currentTime, context.currentTime - at);
+      else
+        node.start(
+          context.currentTime,
+          (context.currentTime - at) * this.playbackRate,
+        );
 
       this.queuedNodes.add(node);
       node.onended = () => this.queuedNodes.delete(node);

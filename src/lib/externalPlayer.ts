@@ -169,18 +169,6 @@ const externalPlayerDefinitions: readonly ExternalPlayerDefinition[] = [
     reportsBack: true,
   },
   {
-    // This is deliberately opt-in. It can decode Matroska in browsers through
-    // WebCodecs + WASM, but that costs substantially more memory than native
-    // playback and still depends on the media host's CORS/range behaviour.
-    mode: "movi",
-    label: "Movi Player (Experimental)",
-    platforms: {
-      settings: ["apple-mobile", "macos", "desktop"],
-      player: ["apple-mobile", "macos", "desktop"],
-    },
-    reportsBack: true,
-  },
-  {
     mode: "infuse",
     label: "Infuse",
     platforms: { settings: ["apple-mobile", "macos"], player: ["apple-mobile", "macos"] },
@@ -241,7 +229,7 @@ export const canPlayInApp = () => playerPlatform() !== "apple-mobile";
 
 /** Modes rendered by this page instead of handed to another application. */
 export const isInAppPlayer = (mode: ExternalPlayerMode) =>
-  mode === "internal" || mode === "native" || mode === "movi";
+  mode === "internal" || mode === "native";
 
 export function externalPlayerLabel(mode: ExternalPlayerMode) {
   return (
@@ -377,7 +365,7 @@ export function launchExternalPlayer(
   options: ExternalPlayerLaunchOptions = {},
 ) {
   // App.tsx intercepts every in-app mode. Keep this guard here too so a future
-  // caller cannot accidentally turn Movi into a copy/download handoff.
+  // caller cannot accidentally turn one into a copy/download handoff.
   if (isInAppPlayer(mode)) return;
   const safeUrl = safeHttpUrl(url);
   if (!safeUrl) {

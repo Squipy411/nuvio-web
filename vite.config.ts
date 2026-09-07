@@ -107,22 +107,7 @@ export default defineConfig(({ mode }) => {
         },
         workbox: {
           navigateFallback: `${base}index.html`,
-          // Movi is an opt-in experiment and its decoder is much larger than
-          // the rest of the shell. Pre-caching it would make every install and
-          // update pay that cost even when Outplayer remains selected.
-          globIgnores: ["**/slim-*.js", "**/movi-*.wasm"],
           runtimeCaching: [
-            {
-              urlPattern: ({ url }) =>
-                /\/assets\/(?:slim-[^/]+\.js|movi-[^/]+\.wasm)$/.test(
-                  url.pathname,
-                ),
-              handler: "CacheFirst",
-              options: {
-                cacheName: "nuvio-movi-player",
-                expiration: { maxEntries: 4, maxAgeSeconds: 2592000 },
-              },
-            },
             {
               urlPattern: ({ request }) => request.destination === "image",
               handler: "CacheFirst",

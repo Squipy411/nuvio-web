@@ -45,8 +45,6 @@ import {
   X,
 } from "lucide-react";
 import {
-  lazy,
-  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -54,8 +52,6 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import moviWasmUrl from "movi-player/movi.wasm?url";
-import type { MoviElement } from "movi-player/element";
 import {
   hasEpisodeAired,
   resolveNextEpisode,
@@ -120,6 +116,16 @@ const AUDIO_ECHO_MS = 900;
  * the label and nothing on screen.
  */
 const RESIZE_MODES: ResizeMode[] = ["Fit", "Zoom", "Stretch"];
+const PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const;
+
+function formatPlaybackRate(value: number) {
+  return `${Number.isInteger(value) ? value : value.toFixed(2).replace(/0$/, "")}×`;
+}
+
+function storedPlaybackRate() {
+  const value = Number(localStorage.getItem("nuvio-web-playback-rate") ?? 1);
+  return Number.isFinite(value) ? clamp(value, 0.25, 2) : 1;
+}
 
 /** How long the picture-mode name stays up after a change. */
 const PICTURE_NOTE_MS = 5000;
@@ -169,7 +175,7 @@ function runtimeHintSeconds(meta: Meta, video?: Video) {
 function handoffOptions() {
   return platform.externalPlayer
     .options("player")
-    .filter((option) => option.mode !== "native" && option.mode !== "movi");
+    .filter((option) => option.mode !== "native");
 }
 
 export type PlayerProps = {
@@ -198,167 +204,7 @@ export type PlayerProps = {
   settings: WebPlayerSettings;
 };
 
-const LazyMoviPlayer = lazy(() =>
-  import("movi-player/react/slim").then((module) => ({
-    default: module.MoviPlayer,
-  })),
-);
-
-function MoviPlayerSurface({
-  stream,
-  meta,
-  video,
-  onClose,
-  onProgress,
-  startPositionMs = 0,
-  settings,
-}: PlayerProps) {
-  const elementRef = useRef<MoviElement | null>(null);
-  const [element, setElement] = useState<MoviElement | null>(null);
-  const positionRef = useRef(Math.max(0, startPositionMs / 1000));
-  const durationRef = useRef(0);
-  const progressRef = useRef(onProgress);
-  progressRef.current = onProgress;
-  const closeRef = useRef(onClose);
-  closeRef.current = onClose;
-  const url = safeHttpUrl(stream.url || stream.externalUrl);
-  const headers = stream.behaviorHints?.proxyHeaders?.request;
-  const accent = useMemo(
-    () =>
-      getComputedStyle(document.documentElement)
-        .getPropertyValue("--accent")
-        .trim() || "#ef3d50",
-    [],
-  );
-  const objectFit =
-    settings.resizeMode === "Stretch"
-      ? "fill"
-      : settings.resizeMode === "Fit"
-        ? "contain"
-        : "cover";
-  const report = useCallback((ended: boolean) => {
-    const element = elementRef.current;
-    const position = Number.isFinite(element?.currentTime)
-      ? element!.currentTime
-      : positionRef.current;
-    const total = Number.isFinite(element?.duration)
-      ? element!.duration
-      : durationRef.current;
-    positionRef.current = Math.max(0, position || 0);
-    durationRef.current = Math.max(0, total || 0);
-    if (positionRef.current > 0 || ended)
-      progressRef.current(
-        positionRef.current * 1000,
-        durationRef.current * 1000,
-        ended,
-      );
-  }, []);
-
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      if (elementRef.current && !elementRef.current.paused) report(false);
-    }, 15_000);
-    const onHide = () => report(elementRef.current?.ended === true);
-    window.addEventListener("pagehide", onHide);
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener("pagehide", onHide);
-      report(elementRef.current?.ended === true);
-      elementRef.current?.pause();
-    };
-  }, [report]);
-
-  const close = useCallback(async () => {
-    report(false);
-    if (document.fullscreenElement && document.exitFullscreen)
-      await document.exitFullscreen().catch(() => undefined);
-    closeRef.current();
-  }, [report]);
-
-  useEffect(() => {
-    if (!element) return;
-    const onBack = (event: Event) => {
-      event.preventDefault();
-      void close();
-    };
-    element.addEventListener("back", onBack);
-    return () => element.removeEventListener("back", onBack);
-  }, [close, element]);
-
-  const handleReady = useCallback((ready: MoviElement) => {
-    elementRef.current = ready;
-    setElement(ready);
-  }, []);
-
-  if (!url)
-    return (
-      <div className="player-view movi-player-view">
-        <div className="player-error">
-          <strong>Movi Player could not open this source</strong>
-          <p>The addon did not provide a safe HTTP video URL.</p>
-          <button onClick={onClose}>Back</button>
-        </div>
-      </div>
-    );
-
-  return (
-    <div className="player-view movi-player-view">
-      <Suspense
-        fallback={
-          <div className="movi-player-loading" role="status">
-            <LoaderCircle className="spin" />
-            <span>Loading Movi Player…</span>
-          </div>
-        }
-      >
-        <LazyMoviPlayer
-          key={url}
-          ref={elementRef}
-          className="movi-player-element"
-          src={url}
-          poster={video?.thumbnail || meta.background}
-          controls
-          autoplay
-          playsinline
-          preload="auto"
-          engine="wasm native"
-          fallback="native"
-          wasmurl={moviWasmUrl}
-          buffersize={48}
-          theme="dark"
-          themecolor={accent}
-          title={video?.title || meta.name}
-          showtitle
-          titlemode="both back"
-          objectfit={objectFit}
-          startat={Math.max(0, startPositionMs / 1000)}
-          headers={headers && Object.keys(headers).length ? JSON.stringify(headers) : undefined}
-          subtitlesize={settings.subtitleFontSizeSp}
-          subtitlecolor={settings.subtitleTextColor.slice(0, 7)}
-          subtitleedge={settings.subtitleOutlineEnabled ? "outline" : "none"}
-          fastseek="buttons keys gestures"
-          doubletap
-          onReady={handleReady}
-          onTimeUpdate={(time) => {
-            positionRef.current = Math.max(0, time || 0);
-            const total = elementRef.current?.duration;
-            if (Number.isFinite(total)) durationRef.current = Math.max(0, total || 0);
-          }}
-          onPause={() => report(false)}
-          onEnded={() => report(true)}
-        />
-      </Suspense>
-    </div>
-  );
-}
-
-export function Player(props: PlayerProps) {
-  if (props.mode === "movi" && !nativePlayer)
-    return <MoviPlayerSurface {...props} />;
-  return <NuvioPlayer {...props} />;
-}
-
-function NuvioPlayer({
+export function Player({
   stream,
   meta,
   video,
@@ -387,6 +233,7 @@ function NuvioPlayer({
   const engineRef = useRef<MediabunnyPlayer | null>(null);
   const [errorCopied, setErrorCopied] = useState(false);
   const hideTimer = useRef<number | undefined>(undefined);
+  const surfaceClickTimer = useRef<number | undefined>(undefined);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   /** Non-fatal: it is playing, but something about it is worth saying. */
@@ -441,9 +288,23 @@ function NuvioPlayer({
   const [muted, setMuted] = useState(
     () => localStorage.getItem("nuvio-web-muted") === "true",
   );
+  const [playbackRate, setPlaybackRate] = useState(storedPlaybackRate);
+  const [stableVolume, setStableVolume] = useState(
+    () => localStorage.getItem("nuvio-web-stable-volume") === "true",
+  );
+  const [hdrEnabled, setHdrEnabled] = useState(
+    () => localStorage.getItem("nuvio-web-hdr-enabled") !== "false",
+  );
+  const hdrControlSupported = useMemo(
+    () =>
+      typeof CSS !== "undefined" &&
+      CSS.supports("dynamic-range-limit", "standard"),
+    [],
+  );
   const [controlsVisible, setControlsVisible] = useState(true);
   const [audioOpen, setAudioOpen] = useState(false);
   const [subsOpen, setSubsOpen] = useState(false);
+  const [playbackMenuOpen, setPlaybackMenuOpen] = useState(false);
   /**
    * How long polled audio state is disregarded after a local change.
    *
@@ -480,14 +341,15 @@ function NuvioPlayer({
     return () => window.clearInterval(timer);
   }, []);
   const endsAt = useMemo(() => {
-    const left = duration - currentTime;
+    const left =
+      (duration - currentTime) / (nativePlayer ? 1 : playbackRate);
     if (!Number.isFinite(left) || left <= 0 || duration <= 0) return "";
     void clockTick;
     return new Date(Date.now() + left * 1000).toLocaleTimeString(undefined, {
       hour: "numeric",
       minute: "2-digit",
     });
-  }, [duration, currentTime, clockTick]);
+  }, [duration, currentTime, playbackRate, clockTick]);
   const seasons = useMemo(
     () =>
       [...new Set((episodes ?? []).map((item) => item.season ?? 0))].sort(
@@ -659,7 +521,9 @@ function NuvioPlayer({
     if (running)
       hideTimer.current = window.setTimeout(() => {
         setAudioOpen(false);
+        setSubsOpen(false);
         setExternalPlayerOpen(false);
+        setPlaybackMenuOpen(false);
         setControlsVisible(false);
       }, 3000);
   }, []);
@@ -847,6 +711,25 @@ function NuvioPlayer({
       showControls();
     }
   }, [decoding, nativeFullscreen, reapplyPictureMode, showControls, videoFit]);
+
+  // Delay a single click very briefly so the first half of a double-click
+  // does not pause and immediately resume the movie before fullscreen opens.
+  const handleSurfaceClick = useCallback(() => {
+    window.clearTimeout(surfaceClickTimer.current);
+    surfaceClickTimer.current = window.setTimeout(() => {
+      surfaceClickTimer.current = undefined;
+      void togglePlayback();
+    }, 220);
+  }, [togglePlayback]);
+  const handleSurfaceDoubleClick = useCallback(() => {
+    window.clearTimeout(surfaceClickTimer.current);
+    surfaceClickTimer.current = undefined;
+    void toggleFullscreen();
+  }, [toggleFullscreen]);
+  useEffect(
+    () => () => window.clearTimeout(surfaceClickTimer.current),
+    [],
+  );
 
   useEffect(() => {
     const element = videoRef.current;
@@ -1184,6 +1067,9 @@ function NuvioPlayer({
     };
     element.volume = clamp(Number.isFinite(volume) ? volume : 1, 0, 1);
     element.muted = muted;
+    element.defaultPlaybackRate = playbackRate;
+    element.playbackRate = playbackRate;
+    element.preservesPitch = true;
     element.playsInline = true;
     const onPlaying = () => {
       setPlaying(true);
@@ -1395,6 +1281,8 @@ function NuvioPlayer({
       engineRef.current = engine;
       engine.setVolume(volume);
       engine.setMuted(muted);
+      engine.setPlaybackRate(playbackRate);
+      engine.setStableVolume(stableVolume);
       void engine
         .start()
         .then(() => {
@@ -1542,6 +1430,24 @@ function NuvioPlayer({
     localStorage.setItem("nuvio-web-volume", String(volume));
     localStorage.setItem("nuvio-web-muted", String(muted));
   }, [volume, muted]);
+  useEffect(() => {
+    localStorage.setItem("nuvio-web-playback-rate", String(playbackRate));
+    localStorage.setItem("nuvio-web-stable-volume", String(stableVolume));
+    localStorage.setItem("nuvio-web-hdr-enabled", String(hdrEnabled));
+  }, [playbackRate, stableVolume, hdrEnabled]);
+  useEffect(() => {
+    if (nativePlayer) return;
+    engineRef.current?.setPlaybackRate(playbackRate);
+    const element = videoRef.current;
+    if (element) {
+      element.defaultPlaybackRate = playbackRate;
+      element.playbackRate = playbackRate;
+      element.preservesPitch = true;
+    }
+  }, [playbackRate]);
+  useEffect(() => {
+    if (!nativePlayer) engineRef.current?.setStableVolume(stableVolume);
+  }, [stableVolume]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (
@@ -1886,6 +1792,7 @@ function NuvioPlayer({
       <style>{cueCss}</style>
       <video
         ref={videoRef}
+        className={!hdrEnabled ? "player-hdr-limited" : undefined}
         playsInline
         autoPlay
         preload="auto"
@@ -1894,18 +1801,20 @@ function NuvioPlayer({
           objectFit: videoFit,
           display: nativePlayer || decoding ? "none" : undefined,
         }}
-        onDoubleClick={toggleFullscreen}
+        onClick={handleSurfaceClick}
+        onDoubleClick={handleSurfaceDoubleClick}
       />
       {/* Where the decoder draws. Object-fit matches the video element so the
           two look the same whichever is playing. */}
       <canvas
         ref={canvasRef}
-        className="player-canvas"
+        className={`player-canvas${!hdrEnabled ? " player-hdr-limited" : ""}`}
         style={{
           objectFit: videoFit,
           display: !nativePlayer && decoding ? undefined : "none",
         }}
-        onDoubleClick={toggleFullscreen}
+        onClick={handleSurfaceClick}
+        onDoubleClick={handleSurfaceDoubleClick}
       />
       <div className="player-shade player-shade-top" />
       <div className="player-shade player-shade-bottom" />
@@ -1935,9 +1844,13 @@ function NuvioPlayer({
           <LoaderCircle className="spin" />
         </div>
       )}
-      {!error && !waiting && !playing && (
-        <button className="player-center" aria-label="Play" onClick={togglePlayback}>
-          <SolidPlay />
+      {!error && !waiting && (
+        <button
+          className="player-center"
+          aria-label={playing ? "Pause" : "Play"}
+          onClick={togglePlayback}
+        >
+          {playing ? <SolidPause /> : <SolidPlay />}
         </button>
       )}
       {status && !waiting && !error && (
@@ -2052,6 +1965,78 @@ function NuvioPlayer({
                 } as CSSProperties
               }
             />
+            {!nativePlayer && (
+              <div className="audio-picker">
+                <button
+                  className={`player-rate-button${playbackMenuOpen ? " active" : ""}`}
+                  aria-label={`Playback settings, speed ${formatPlaybackRate(playbackRate)}`}
+                  aria-expanded={playbackMenuOpen}
+                  onClick={() => {
+                    setAudioOpen(false);
+                    setSubsOpen(false);
+                    setExternalPlayerOpen(false);
+                    setPlaybackMenuOpen((value) => !value);
+                  }}
+                >
+                  {formatPlaybackRate(playbackRate)}
+                </button>
+                {playbackMenuOpen && (
+                  <div className="audio-menu playback-options-menu">
+                    <strong>Playback speed</strong>
+                    <div className="playback-rate-grid">
+                      {PLAYBACK_RATES.map((rate) => (
+                        <button
+                          key={rate}
+                          className={playbackRate === rate ? "selected" : ""}
+                          onClick={() => {
+                            setPlaybackRate(rate);
+                            setPlaybackMenuOpen(false);
+                          }}
+                        >
+                          {formatPlaybackRate(rate)}
+                        </button>
+                      ))}
+                    </div>
+                    <label className="playback-option-row">
+                      <span>
+                        <strong>Stable Volume</strong>
+                        <small>
+                          {decoding
+                            ? "Reduce sudden loud and quiet changes."
+                            : "Available for Nuvio-decoded streams."}
+                        </small>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={stableVolume}
+                        disabled={!decoding}
+                        onChange={(event) => setStableVolume(event.target.checked)}
+                      />
+                    </label>
+                    <label className="playback-option-row">
+                      <span>
+                        <strong>HDR output</strong>
+                        <small>
+                          {hdrControlSupported
+                            ? "Turn off to limit HDR brightness to SDR."
+                            : "This browser controls HDR automatically."}
+                        </small>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={hdrEnabled}
+                        disabled={!hdrControlSupported}
+                        onChange={(event) => setHdrEnabled(event.target.checked)}
+                      />
+                    </label>
+                    <small className="playback-options-note">
+                      HDR output cannot repair a Dolby Vision-only source with
+                      missing fallback color data.
+                    </small>
+                  </div>
+                )}
+              </div>
+            )}
             {nativePlayer && (
               <div className="audio-picker">
                 <button
@@ -2059,6 +2044,7 @@ function NuvioPlayer({
                   className={subsOpen ? "active" : ""}
                   aria-expanded={subsOpen}
                   onClick={() => {
+                    setPlaybackMenuOpen(false);
                     setExternalPlayerOpen(false);
                     setAudioOpen(false);
                     setSubsOpen((value) => !value);
@@ -2100,6 +2086,7 @@ function NuvioPlayer({
                 className={audioOpen ? "active" : ""}
                 aria-expanded={audioOpen}
                 onClick={() => {
+                  setPlaybackMenuOpen(false);
                   setExternalPlayerOpen(false);
                   setSubsOpen(false);
                   setAudioOpen((value) => !value);
@@ -2145,6 +2132,7 @@ function NuvioPlayer({
                   aria-label="Open in external player"
                   aria-expanded={externalPlayerOpen}
                   onClick={() => {
+                    setPlaybackMenuOpen(false);
                     setAudioOpen(false);
                     setExternalPlayerOpen((value) => !value);
                   }}
@@ -2172,6 +2160,7 @@ function NuvioPlayer({
                 className={episodesOpen ? "active" : ""}
                 aria-expanded={episodesOpen}
                 onClick={() => {
+                  setPlaybackMenuOpen(false);
                   setAudioOpen(false);
                   setExternalPlayerOpen(false);
                   setEpisodesOpen((value) => !value);

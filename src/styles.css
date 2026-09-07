@@ -3026,37 +3026,6 @@ input[type="password"]::-ms-clear {
 .player-view::backdrop {
   background: #000;
 }
-.movi-player-view {
-  position: fixed;
-  inset: 0;
-  z-index: 1000;
-  width: 100vw;
-  height: 100vh;
-  height: 100dvh;
-  overflow: hidden;
-  background: #000;
-}
-.movi-player-element {
-  display: block;
-  width: 100%;
-  height: 100%;
-  background: #000;
-}
-.movi-player-loading {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-content: center;
-  justify-items: center;
-  gap: 14px;
-  color: #fff;
-  background: #000;
-}
-.movi-player-loading svg {
-  width: 34px;
-  height: 34px;
-  color: var(--accent);
-}
 /* libmpv renders into the Tauri window below WebView2.  Only the native
    player route makes the web surface transparent; the browser/PWA route keeps
    its solid black video canvas.  The controls and shades remain ordinary DOM
@@ -3105,6 +3074,12 @@ html.native-player-active.native-player-covered .player-view.native-player {
   background: #000;
   object-position: center center;
 }
+/* New HDR-aware browsers can deliberately cap an HDR surface at reference
+   white. Older browsers ignore this declaration and continue using their own
+   color-management path. */
+.player-hdr-limited {
+  dynamic-range-limit: standard;
+}
 /*
  * Audible HTML video is surfaced by iOS in Dynamic Island/Now Playing and the
  * web cannot suppress that system indicator. Keep moving picture content out
@@ -3145,9 +3120,8 @@ html.native-player-active.native-player-covered .player-view.native-player {
   background: none;
   transition: opacity 0.2s ease;
 }
-/* The glyph alone, larger. A filled circle in the middle of the picture is a
-   lot of furniture for a control that is only a hint — a drop shadow separates
-   it from a bright scene without covering any of it. */
+/* A familiar, high-contrast transport target that stays legible over both a
+   bright frame and a black one. */
 .player-center {
   position: absolute;
   z-index: 3;
@@ -3156,10 +3130,11 @@ html.native-player-active.native-player-covered .player-view.native-player {
   width: 96px;
   height: 96px;
   transform: translate(-50%, -50%);
-  border: 0;
-  background: none;
-  color: var(--accent);
-  filter: drop-shadow(0 2px 14px #000c);
+  border: 1px solid #ffffff24;
+  border-radius: 50%;
+  background: #080808e8;
+  color: #fff;
+  box-shadow: 0 10px 32px #0009;
   display: grid;
   place-items: center;
   cursor: pointer;
@@ -3169,20 +3144,26 @@ html.native-player-active.native-player-covered .player-view.native-player {
 }
 .player-center:hover {
   transform: translate(-50%, -50%) scale(1.05);
+  background: #151515f2;
 }
 .player-center-busy {
   pointer-events: none;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  box-shadow: none;
 }
 .player-center-busy:hover {
   transform: translate(-50%, -50%);
+  background: none;
 }
 .player-center-busy svg {
   width: 52px;
   height: 52px;
 }
 .player-center svg {
-  width: 64px;
-  height: 64px;
+  width: 48px;
+  height: 48px;
 }
 .player-status {
   z-index: 4;
@@ -3386,6 +3367,90 @@ html.native-player-active.native-player-covered .player-view.native-player {
 .audio-menu a svg {
   width: 17px;
 }
+.player-control-group .player-rate-button {
+  min-width: 50px;
+  padding-inline: 8px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.playback-options-menu {
+  width: min(370px, calc(100vw - 30px));
+  gap: 11px;
+}
+.playback-rate-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+.player-control-group .playback-rate-grid button {
+  min-width: 0;
+  width: 100%;
+  height: 36px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: #22272d;
+  font-weight: 700;
+}
+.player-control-group .playback-rate-grid button:hover {
+  background: #343b43;
+}
+.player-control-group .playback-rate-grid button.selected {
+  background: var(--accent-gradient, var(--accent));
+  color: var(--accent-ink);
+}
+.playback-option-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 54px;
+  padding: 9px 7px;
+  border-top: 1px solid #ffffff12;
+  cursor: pointer;
+}
+.playback-option-row > span {
+  display: grid;
+  gap: 3px;
+}
+.playback-option-row > span > strong {
+  font-size: 14px;
+}
+.audio-menu .playback-option-row small,
+.audio-menu .playback-options-note {
+  margin: 0;
+}
+.playback-option-row input {
+  appearance: none;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 24px;
+  margin: 0;
+  border: 1px solid #ffffff2a;
+  border-radius: 999px;
+  background: #353a40;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.playback-option-row input::after {
+  content: "";
+  display: block;
+  width: 18px;
+  height: 18px;
+  margin: 2px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s ease;
+}
+.playback-option-row input:checked {
+  background: var(--accent-gradient, var(--accent));
+}
+.playback-option-row input:checked::after {
+  transform: translateX(18px);
+}
+.playback-option-row input:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
 .controls-hidden {
   cursor: none;
 }
@@ -3414,6 +3479,10 @@ html.native-player-active.native-player-covered .player-view.native-player {
     width: 62px;
     height: 62px;
   }
+  .player-center svg {
+    width: 32px;
+    height: 32px;
+  }
   .player-controls {
     padding: 12px 12px max(12px, env(safe-area-inset-bottom));
   }
@@ -3426,16 +3495,25 @@ html.native-player-active.native-player-covered .player-view.native-player {
     margin-top: 5px;
   }
   .player-control-group {
-    gap: 5px;
+    gap: 3px;
   }
   .player-control-group button {
-    min-width: 40px;
-    height: 40px;
-    padding: 0 9px;
+    min-width: 34px;
+    height: 36px;
+    padding: 0 6px;
+  }
+  .player-control-group button svg {
+    width: 19px;
+    height: 19px;
   }
   .player-control-group .player-play {
-    width: 48px;
-    height: 48px;
+    width: 44px;
+    height: 44px;
+  }
+  .player-control-group .player-rate-button {
+    min-width: 42px;
+    padding-inline: 4px;
+    font-size: 12px;
   }
   .volume-slider {
     display: none;
