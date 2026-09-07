@@ -50,6 +50,11 @@ test('web player exposes real speed, stable-volume, HDR, and surface controls', 
   assert.match(component, /engine\.setStableVolume\(stableVolume\)/);
   assert.match(component, /CSS\.supports\("dynamic-range-limit", "standard"\)/);
   assert.match(component, /onClick=\{handleSurfaceClick\}/);
+  assert.match(
+    component,
+    /if \(settingsPage !== null\) \{[\s\S]*?setSettingsPage\(null\);[\s\S]*?return;/,
+    "a surface click must dismiss the settings menu before it reaches playback",
+  );
   assert.match(engine, /createDynamicsCompressor\(\)/);
   assert.match(engine, /node\.playbackRate\.value = this\.playbackRate/);
   assert.match(styles, /dynamic-range-limit: standard/);

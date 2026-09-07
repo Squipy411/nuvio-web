@@ -319,6 +319,7 @@ export function Player({
   const [errorCopied, setErrorCopied] = useState(false);
   const hideTimer = useRef<number | undefined>(undefined);
   const surfaceClickTimer = useRef<number | undefined>(undefined);
+  const surfaceMenuDismissedAt = useRef(0);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   /** Non-fatal: it is playing, but something about it is worth saying. */
@@ -864,14 +865,24 @@ export function Player({
   // does not pause and immediately resume the movie before fullscreen opens.
   const handleSurfaceClick = useCallback(() => {
     window.clearTimeout(surfaceClickTimer.current);
+    // A visible menu owns the next background click. Closing it must not also
+    // leak through to the player transport and pause/resume the stream.
+    if (settingsPage !== null) {
+      surfaceClickTimer.current = undefined;
+      surfaceMenuDismissedAt.current = performance.now();
+      setSettingsPage(null);
+      showControls();
+      return;
+    }
     surfaceClickTimer.current = window.setTimeout(() => {
       surfaceClickTimer.current = undefined;
       void togglePlayback();
     }, 220);
-  }, [togglePlayback]);
+  }, [settingsPage, showControls, togglePlayback]);
   const handleSurfaceDoubleClick = useCallback(() => {
     window.clearTimeout(surfaceClickTimer.current);
     surfaceClickTimer.current = undefined;
+    if (performance.now() - surfaceMenuDismissedAt.current < 400) return;
     void toggleFullscreen();
   }, [toggleFullscreen]);
   useEffect(
