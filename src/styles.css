@@ -3511,12 +3511,28 @@ html.native-player-active.native-player-covered .player-view.native-player {
   text-align: left;
   cursor: pointer;
 }
+/* A glyph then the name, so a row is recognisable at a glance rather than
+   only by reading it — which is what a menu opened mid-scene is for. */
 .settings-menu > .settings-row > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
   min-width: 0;
   overflow: hidden;
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.settings-menu > .settings-row > span > svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: #97a1ac;
+}
+/* Lit with the row it belongs to, so a switch that is on reads as on from its
+   icon as well as from its track. */
+.settings-switch:has(input:checked) > span > svg {
+  color: var(--accent);
 }
 .settings-menu > .settings-row > em {
   display: inline-flex;

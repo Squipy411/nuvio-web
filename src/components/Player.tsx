@@ -1,5 +1,11 @@
 import type Hls from "hls.js";
-import { SolidPause, SolidPlay, SourceSwapIcon } from "./PlaybackIcons";
+import {
+  ClosedCaptionIcon,
+  HdIcon,
+  SolidPause,
+  SolidPlay,
+  SourceSwapIcon,
+} from "./PlaybackIcons";
 import { automaticSkipSegment, nextEpisodeDue, shouldBlurEpisode } from "../lib/playbackPolicy";
 import { nativePlayerPreferences } from "../lib/nativePlayerPreferences";
 import { startNativePlaybackSession } from "../lib/nativePlaybackSession";
@@ -30,6 +36,7 @@ import {
 } from "../lib/webSettings";
 import {
   ArrowLeft,
+  AudioLines,
   ChevronLeft,
   ChevronRight,
   Copy,
@@ -37,7 +44,9 @@ import {
   Info,
   ExternalLink,
   FastForward,
-  List,
+  Gauge,
+  ListMusic,
+  ListVideo,
   LoaderCircle,
   Maximize,
   Play,
@@ -2160,7 +2169,10 @@ export function Player({
                       className="settings-row"
                       onClick={() => setSettingsPage("captions")}
                     >
-                      <span>{t("player.subtitles")}</span>
+                      <span>
+                        <ClosedCaptionIcon />
+                        {t("player.subtitles")}
+                      </span>
                       <em>
                         {selectedSubtitleLabel}
                         <ChevronRight />
@@ -2171,7 +2183,10 @@ export function Player({
                     className="settings-row"
                     onClick={() => setSettingsPage("audio")}
                   >
-                    <span>{t("player.audioTrack")}</span>
+                    <span>
+                      <ListMusic />
+                      {t("player.audioTrack")}
+                    </span>
                     <em>
                       {selectedAudioLabel}
                       <ChevronRight />
@@ -2182,7 +2197,10 @@ export function Player({
                       className="settings-row"
                       onClick={() => setSettingsPage("speed")}
                     >
-                      <span>{t("player.playbackSpeed")}</span>
+                      <span>
+                        <Gauge />
+                        {t("player.playbackSpeed")}
+                      </span>
                       <em>
                         {formatPlaybackRate(playbackRate)}
                         <ChevronRight />
@@ -2195,7 +2213,10 @@ export function Player({
                       nobody reads while watching. */}
                   {!nativePlayer && (
                     <label className="settings-row settings-switch">
-                      <span>Stable Volume</span>
+                      <span>
+                        <AudioLines />
+                        Stable Volume
+                      </span>
                       <input
                         type="checkbox"
                         checked={stableVolume}
@@ -2206,7 +2227,10 @@ export function Player({
                   )}
                   {!nativePlayer && (
                     <label className="settings-row settings-switch">
-                      <span>HDR output</span>
+                      <span>
+                        <HdIcon />
+                        HDR output
+                      </span>
                       <input
                         type="checkbox"
                         checked={hdrEnabled}
@@ -2366,7 +2390,7 @@ export function Player({
                   setEpisodesOpen((value) => !value);
                 }}
               >
-                <List />
+                <ListVideo />
               </button>
             )}
             {/* Only where the picture can actually be rescaled: CSS does it for
