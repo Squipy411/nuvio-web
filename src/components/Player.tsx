@@ -18,6 +18,7 @@ import { loadSubtitles } from "../lib/addons.ts";
 import {
   activeBrowserSubtitleText,
   chooseBrowserSubtitle,
+  isForcedSubtitle,
   parseBrowserSubtitles,
   type BrowserSubtitleCue,
 } from "../lib/subtitles.ts";
@@ -402,8 +403,9 @@ export function Player({
    * asked for it was, and the way back is the heading above it.
    */
   const [settingsPage, setSettingsPage] = useState<
-    null | "root" | "captions" | "audio" | "speed"
+    null | "root" | "captions" | "captionVersions" | "audio" | "speed"
   >(null);
+  const [subtitleGroupKey, setSubtitleGroupKey] = useState<string | null>(null);
   /**
    * How long polled audio state is disregarded after a local change.
    *
@@ -1715,6 +1717,9 @@ export function Player({
         id,
         lang: track.lang,
         label: `${language} · ${track.addonName}${variant}`,
+        language,
+        addonName: track.addonName,
+        variantLabel: `${track.addonName}${variant}`,
       };
     });
   }, [addonSubtitles]);
@@ -1749,12 +1754,63 @@ export function Player({
     settings.secondaryPreferredSubtitleLanguage,
   ]);
 
+  /**
+   * Addon results frequently contain several complete subtitle files for the
+   * same language, each timed for a different release. They are alternatives,
+   * not pieces to concatenate, so the first page groups them and a second page
+   * exposes the individual versions only when there is a choice to make.
+   */
+  const browserSubtitleGroups = useMemo(() => {
+    if (nativePlayer) return [];
+    const groups = new Map<
+      string,
+      {
+        key: string;
+        label: string;
+        tracks: Array<(typeof browserSubtitleTracks)[number]>;
+      }
+    >();
+    for (const track of visibleSubtitleTracks) {
+      const browserTrack = browserSubtitleTracks.find(
+        (candidate) => candidate.id === track.id,
+      );
+      if (!browserTrack) continue;
+      const source = addonSubtitles[browserTrack.id];
+      const forced = source
+        ? isForcedSubtitle(source.id, source.lang, source.url)
+        : false;
+      const language =
+        browserTrack.language || languageName(browserTrack.lang) || "Unknown";
+      const key = `${language.toLowerCase()}\u0000${forced ? "forced" : "full"}`;
+      const group = groups.get(key) ?? {
+        key,
+        label: forced ? `${language} (Forced)` : language,
+        tracks: [],
+      };
+      group.tracks.push(browserTrack);
+      groups.set(key, group);
+    }
+    return [...groups.values()];
+  }, [addonSubtitles, browserSubtitleTracks, visibleSubtitleTracks]);
+  const openSubtitleGroup = useMemo(
+    () => browserSubtitleGroups.find((group) => group.key === subtitleGroupKey),
+    [browserSubtitleGroups, subtitleGroupKey],
+  );
+  useEffect(() => {
+    if (settingsPage === "captionVersions" && !openSubtitleGroup) {
+      setSettingsPage("captions");
+    }
+  }, [openSubtitleGroup, settingsPage]);
+
   const canPickSubtitles =
     !!nativePlayer || subtitleIndexBusy || browserSubtitleTracks.length > 0;
   /** What the settings list shows beside each row, YouTube-fashion. */
-  const selectedSubtitleLabel =
-    offeredSubtitleTracks.find((track) => track.id === selectedSubtitle)?.label ??
-    t("player.off");
+  const selectedSubtitleLabel = nativePlayer
+    ? offeredSubtitleTracks.find((track) => track.id === selectedSubtitle)?.label ??
+      t("player.off")
+    : browserSubtitleGroups.find((group) =>
+        group.tracks.some((track) => track.id === selectedSubtitle),
+      )?.label ?? t("player.off");
   const selectedAudioLabel =
     audioTracks.find((track) => track.id === selectedAudio)?.label ??
     audioTracks[0]?.label ??
@@ -2456,20 +2512,74 @@ export function Player({
                   >
                     {t("player.off")}
                   </button>
-                  {visibleSubtitleTracks.map((track) => (
-                    <button
-                      key={track.id}
-                      className={selectedSubtitle === track.id ? "selected" : ""}
-                      onClick={() => selectSubtitle(track.id)}
-                    >
-                      {track.label}
-                    </button>
-                  ))}
+                  {nativePlayer
+                    ? visibleSubtitleTracks.map((track) => (
+                        <button
+                          key={track.id}
+                          className={selectedSubtitle === track.id ? "selected" : ""}
+                          onClick={() => selectSubtitle(track.id)}
+                        >
+                          {track.label}
+                        </button>
+                      ))
+                    : browserSubtitleGroups.map((group) => {
+                        const selected = group.tracks.some(
+                          (track) => track.id === selectedSubtitle,
+                        );
+                        if (group.tracks.length === 1) {
+                          const track = group.tracks[0];
+                          return (
+                            <button
+                              key={group.key}
+                              className={selected ? "selected" : ""}
+                              onClick={() => selectSubtitle(track.id)}
+                            >
+                              {group.label}
+                            </button>
+                          );
+                        }
+                        return (
+                          <button
+                            key={group.key}
+                            className={`settings-row${selected ? " selected" : ""}`}
+                            onClick={() => {
+                              setSubtitleGroupKey(group.key);
+                              setSettingsPage("captionVersions");
+                            }}
+                          >
+                            <span>{group.label}</span>
+                            <em>
+                              {group.tracks.length} versions
+                              <ChevronRight />
+                            </em>
+                          </button>
+                        );
+                      })}
                   {subtitleIndexBusy ? (
                     <p className="subtitle-loading"><LoaderCircle className="spin" /> Loading subtitles…</p>
                   ) : !offeredSubtitleTracks.length ? (
                     <p>No subtitle addon returned a track for this title.</p>
                   ) : null}
+                </div>
+              )}
+              {settingsPage === "captionVersions" && openSubtitleGroup && (
+                <div className="audio-menu settings-menu subtitle-menu">
+                  <button
+                    className="settings-back"
+                    onClick={() => setSettingsPage("captions")}
+                  >
+                    <ChevronLeft />
+                    <strong>{openSubtitleGroup.label}</strong>
+                  </button>
+                  {openSubtitleGroup.tracks.map((track) => (
+                    <button
+                      key={track.id}
+                      className={selectedSubtitle === track.id ? "selected" : ""}
+                      onClick={() => selectSubtitle(track.id)}
+                    >
+                      {track.variantLabel}
+                    </button>
+                  ))}
                 </div>
               )}
               {settingsPage === "audio" && (
