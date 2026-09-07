@@ -66,7 +66,7 @@ import type {
 } from "../lib/metaScreenSettings";
 import { useDragScroll } from "../lib/useDragScroll";
 import { useProgressiveList } from "../lib/useProgressiveList";
-import { useIncrementalList } from "../lib/useIncrementalList";
+import { useVirtualList } from "../lib/useVirtualList";
 import { useLongPress } from "../lib/useLongPress";
 import { useScrollLock } from "../lib/useScrollLock";
 import { useSwipeBack } from "../lib/useSwipeBack";
@@ -760,14 +760,14 @@ export function Details({
   const episodeResetKey = `${meta.id}:${season ?? ""}:${episodeQuery.trim().toLocaleLowerCase()}`;
   const {
     visible: renderedEpisodes,
-    complete: episodesComplete,
-    sentinelRef: episodeSentinelRef,
-  } = useIncrementalList(visibleEpisodes, {
+    listRef: episodeListRef,
+    beforeSize: episodesBeforeSize,
+    afterSize: episodesAfterSize,
+  } = useVirtualList(visibleEpisodes, {
     resetKey: episodeResetKey,
-    first: 40,
-    chunk: 40,
+    estimateSize: 120,
+    overscan: 8,
   });
-  const episodeListRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (episodeListRef.current) episodeListRef.current.scrollTop = 0;
   }, [episodeResetKey]);
@@ -1369,6 +1369,13 @@ export function Details({
             ref={episodeListRef}
             className={`episode-list is-${metaScreenSettings.episodeCardStyle}`}
           >
+            {episodesBeforeSize > 0 && (
+              <div
+                className="episode-list-spacer"
+                style={{ height: episodesBeforeSize }}
+                aria-hidden="true"
+              />
+            )}
             {renderedEpisodes.map((video) => (
                 <EpisodeRow
                   key={video.id}
@@ -1395,10 +1402,10 @@ export function Details({
                   onMenu={(x, y) => setMenu({ x, y, video })}
                 />
               ))}
-            {!episodesComplete && (
+            {episodesAfterSize > 0 && (
               <div
-                ref={episodeSentinelRef}
-                className="episode-list-sentinel"
+                className="episode-list-spacer"
+                style={{ height: episodesAfterSize }}
                 aria-hidden="true"
               />
             )}

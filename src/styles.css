@@ -1141,9 +1141,9 @@ a {
   display: grid;
   gap: 10px;
 }
-.episode-list-sentinel {
+.episode-list-spacer {
+  grid-column: 1 / -1;
   width: 100%;
-  height: 1px;
   pointer-events: none;
 }
 
