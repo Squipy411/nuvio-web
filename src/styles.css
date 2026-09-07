@@ -141,8 +141,8 @@ a {
   left: 0;
   right: 0;
   z-index: 40;
-  background: #14181d;
-  border: 1px solid #292f36;
+  background: var(--episodes-raised);
+  border: 1px solid var(--episodes-field-line);
   border-radius: 14px;
   padding: 6px;
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
@@ -165,7 +165,7 @@ a {
   border-radius: 10px;
 }
 .search-history-row:hover {
-  background: #1d2228;
+  background: var(--episodes-hover);
 }
 /* Overrides the submit button's chip styling, which reaches every button
    inside the form. */
@@ -1738,11 +1738,8 @@ a {
 .continue-entry-brand > h2 { grid-area: 1 / 1; }
 .continue-entry-brand > img { max-width: 100%; max-height: 140px; object-fit: contain; }
 .continue-entry-brand > h2 { margin: 0; color: var(--text); font-size: clamp(22px, 4vw, 32px); text-align: center; }
-.source-sheet-desktop-close { display: none; }
 @media (min-width: 1000px) {
-  .source-sheet-mobile-back { display: none; }
-  .source-sheet-desktop-close { display: grid; place-items: center; flex: 0 0 auto; order: 3; }
-  .source-sheet-refresh { order: -1; flex: 0 0 auto; }
+  .source-sheet-refresh { flex: 0 0 auto; }
 }
 
 .player-diagnostics {
@@ -1776,19 +1773,21 @@ a {
 .source-sheet-tools {
   min-width: 0;
 }
-/* Two pickers and a close button do not fit a phone on one line — they put
-   the X off the side of the screen, which is the only way out of here. The
-   title keeps the X beside it and the pickers take the row below. */
+/* Leading the row at every width, like the back arrow on every other screen.
+   It was an X in the far corner on a desktop and an arrow at the start on a
+   phone, so the same sheet had two different ways out depending on the size of
+   the window. An X belongs in the corner it closes from; a back arrow does
+   not, and this sheet is a place you go back from. */
+.source-sheet-back {
+  order: -1;
+  flex: 0 0 auto;
+}
+/* Two pickers and the way out do not fit a phone on one line. The title keeps
+   the arrow beside it and the pickers take the row below. */
 @media (max-width: 999px) {
   .source-column > header {
     flex-wrap: wrap;
     row-gap: 10px;
-  }
-  /* Leading the row, like the back arrow on every other screen. It sat at the
-     end because it was an X, and an X belongs in the corner it closes from —
-     a back arrow does not. */
-  .source-sheet-back {
-    order: -1;
   }
   .source-sheet-tools {
     order: 1;
@@ -2883,6 +2882,8 @@ a {
   --episodes-field: #0a0a0b;
   --episodes-field-line: #232428;
   --episodes-hover: #17181b;
+  /* Cards resting on it: an episode row, the search history popover. */
+  --episodes-raised: #0b0b0c;
 }
 :root[data-theme="amoled"] {
   --app-bg: #000;
@@ -7589,31 +7590,42 @@ body.is-locked {
     scrollbar-color: #34353a #080809;
     scrollbar-width: thin;
   }
+  /* The player's own panel is the same list at the same width, so it takes the
+     same row: a 145px still, and an overview given two wrapped lines instead
+     of one truncated to an ellipsis. */
   .detail-view.has-episode-panel .episode-list > button,
-  .detail-view.has-episode-panel .episode-list.is-list > button {
+  .detail-view.has-episode-panel .episode-list.is-list > button,
+  .player-episodes .episode-list > button,
+  .player-episodes .episode-list.is-list > button {
     grid-template-columns: 145px minmax(0, 1fr);
     min-height: 98px;
     gap: 0;
     padding: 8px;
     border: 0;
     border-radius: 14px;
-    background: #0b0b0c;
+    background: var(--episodes-raised);
     transition: background 130ms ease;
   }
   .detail-view.has-episode-panel .episode-list > button:hover,
-  .detail-view.has-episode-panel .episode-list > button:focus-visible {
-    background: #171719;
+  .detail-view.has-episode-panel .episode-list > button:focus-visible,
+  .player-episodes .episode-list > button:hover,
+  .player-episodes .episode-list > button:focus-visible {
+    background: var(--episodes-hover);
   }
   .detail-view.has-episode-panel .episode-thumb,
-  .detail-view.has-episode-panel .episode-list.is-list .episode-thumb {
+  .detail-view.has-episode-panel .episode-list.is-list .episode-thumb,
+  .player-episodes .episode-thumb,
+  .player-episodes .episode-list.is-list .episode-thumb {
     width: 145px;
     height: 82px;
   }
-  .detail-view.has-episode-panel .episode-row > span:not(.episode-thumb) {
+  .detail-view.has-episode-panel .episode-row > span:not(.episode-thumb),
+  .player-episodes .episode-row > span:not(.episode-thumb) {
     align-content: center;
     padding: 5px 11px;
   }
-  .detail-view.has-episode-panel .episode-list p {
+  .detail-view.has-episode-panel .episode-list p,
+  .player-episodes .episode-list p {
     display: -webkit-box;
     overflow: hidden;
     -webkit-box-orient: vertical;
@@ -7624,11 +7636,13 @@ body.is-locked {
     line-height: 1.42;
     white-space: normal;
   }
-  .detail-view.has-episode-panel .episode-list strong {
+  .detail-view.has-episode-panel .episode-list strong,
+  .player-episodes .episode-list strong {
     font-size: 13px;
     line-height: 1.2;
   }
-  .detail-view.has-episode-panel .episode-list small {
+  .detail-view.has-episode-panel .episode-list small,
+  .player-episodes .episode-list small {
     color: #92959b;
     font-size: 9px;
     font-weight: 700;
