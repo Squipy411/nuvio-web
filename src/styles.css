@@ -3026,6 +3026,37 @@ input[type="password"]::-ms-clear {
 .player-view::backdrop {
   background: #000;
 }
+.movi-player-view {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  background: #000;
+}
+.movi-player-element {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #000;
+}
+.movi-player-loading {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 14px;
+  color: #fff;
+  background: #000;
+}
+.movi-player-loading svg {
+  width: 34px;
+  height: 34px;
+  color: var(--accent);
+}
 /* libmpv renders into the Tauri window below WebView2.  Only the native
    player route makes the web surface transparent; the browser/PWA route keeps
    its solid black video canvas.  The controls and shades remain ordinary DOM

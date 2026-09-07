@@ -45,6 +45,8 @@ import {
   X,
 } from "lucide-react";
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -52,6 +54,8 @@ import {
   useState,
   type CSSProperties,
 } from "react";
+import moviWasmUrl from "movi-player/movi.wasm?url";
+import type { MoviElement } from "movi-player/element";
 import {
   hasEpisodeAired,
   resolveNextEpisode,
@@ -165,10 +169,196 @@ function runtimeHintSeconds(meta: Meta, video?: Video) {
 function handoffOptions() {
   return platform.externalPlayer
     .options("player")
-    .filter((option) => option.mode !== "native");
+    .filter((option) => option.mode !== "native" && option.mode !== "movi");
 }
 
-export function Player({
+export type PlayerProps = {
+  stream: Stream;
+  meta: Meta;
+  video?: Video;
+  onClose(): void;
+  onExternalPlay(
+    mode: ExternalPlayerMode,
+    url: string,
+    positionMs: number,
+  ): void;
+  startPositionMs?: number;
+  episodes?: Video[];
+  blurUnwatchedEpisodes?: boolean;
+  animeSkipClientId?: string;
+  watchIndex?: WatchIndex;
+  mode?: ExternalPlayerMode;
+  onPlayEpisode?(next: Video): void;
+  onProgress(positionMs: number, durationMs: number, ended: boolean): void;
+  onNativeProgressSnapshot?(
+    positionMs: number,
+    durationMs: number,
+    ended: boolean,
+  ): void;
+  settings: WebPlayerSettings;
+};
+
+const LazyMoviPlayer = lazy(() =>
+  import("movi-player/react/slim").then((module) => ({
+    default: module.MoviPlayer,
+  })),
+);
+
+function MoviPlayerSurface({
+  stream,
+  meta,
+  video,
+  onClose,
+  onProgress,
+  startPositionMs = 0,
+  settings,
+}: PlayerProps) {
+  const elementRef = useRef<MoviElement | null>(null);
+  const [element, setElement] = useState<MoviElement | null>(null);
+  const positionRef = useRef(Math.max(0, startPositionMs / 1000));
+  const durationRef = useRef(0);
+  const progressRef = useRef(onProgress);
+  progressRef.current = onProgress;
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  const url = safeHttpUrl(stream.url || stream.externalUrl);
+  const headers = stream.behaviorHints?.proxyHeaders?.request;
+  const accent = useMemo(
+    () =>
+      getComputedStyle(document.documentElement)
+        .getPropertyValue("--accent")
+        .trim() || "#ef3d50",
+    [],
+  );
+  const objectFit =
+    settings.resizeMode === "Stretch"
+      ? "fill"
+      : settings.resizeMode === "Fit"
+        ? "contain"
+        : "cover";
+  const report = useCallback((ended: boolean) => {
+    const element = elementRef.current;
+    const position = Number.isFinite(element?.currentTime)
+      ? element!.currentTime
+      : positionRef.current;
+    const total = Number.isFinite(element?.duration)
+      ? element!.duration
+      : durationRef.current;
+    positionRef.current = Math.max(0, position || 0);
+    durationRef.current = Math.max(0, total || 0);
+    if (positionRef.current > 0 || ended)
+      progressRef.current(
+        positionRef.current * 1000,
+        durationRef.current * 1000,
+        ended,
+      );
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (elementRef.current && !elementRef.current.paused) report(false);
+    }, 15_000);
+    const onHide = () => report(elementRef.current?.ended === true);
+    window.addEventListener("pagehide", onHide);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("pagehide", onHide);
+      report(elementRef.current?.ended === true);
+      elementRef.current?.pause();
+    };
+  }, [report]);
+
+  const close = useCallback(async () => {
+    report(false);
+    if (document.fullscreenElement && document.exitFullscreen)
+      await document.exitFullscreen().catch(() => undefined);
+    closeRef.current();
+  }, [report]);
+
+  useEffect(() => {
+    if (!element) return;
+    const onBack = (event: Event) => {
+      event.preventDefault();
+      void close();
+    };
+    element.addEventListener("back", onBack);
+    return () => element.removeEventListener("back", onBack);
+  }, [close, element]);
+
+  const handleReady = useCallback((ready: MoviElement) => {
+    elementRef.current = ready;
+    setElement(ready);
+  }, []);
+
+  if (!url)
+    return (
+      <div className="player-view movi-player-view">
+        <div className="player-error">
+          <strong>Movi Player could not open this source</strong>
+          <p>The addon did not provide a safe HTTP video URL.</p>
+          <button onClick={onClose}>Back</button>
+        </div>
+      </div>
+    );
+
+  return (
+    <div className="player-view movi-player-view">
+      <Suspense
+        fallback={
+          <div className="movi-player-loading" role="status">
+            <LoaderCircle className="spin" />
+            <span>Loading Movi Player…</span>
+          </div>
+        }
+      >
+        <LazyMoviPlayer
+          key={url}
+          ref={elementRef}
+          className="movi-player-element"
+          src={url}
+          poster={video?.thumbnail || meta.background}
+          controls
+          autoplay
+          playsinline
+          preload="auto"
+          engine="wasm native"
+          fallback="native"
+          wasmurl={moviWasmUrl}
+          buffersize={48}
+          theme="dark"
+          themecolor={accent}
+          title={video?.title || meta.name}
+          showtitle
+          titlemode="both back"
+          objectfit={objectFit}
+          startat={Math.max(0, startPositionMs / 1000)}
+          headers={headers && Object.keys(headers).length ? JSON.stringify(headers) : undefined}
+          subtitlesize={settings.subtitleFontSizeSp}
+          subtitlecolor={settings.subtitleTextColor.slice(0, 7)}
+          subtitleedge={settings.subtitleOutlineEnabled ? "outline" : "none"}
+          fastseek="buttons keys gestures"
+          doubletap
+          onReady={handleReady}
+          onTimeUpdate={(time) => {
+            positionRef.current = Math.max(0, time || 0);
+            const total = elementRef.current?.duration;
+            if (Number.isFinite(total)) durationRef.current = Math.max(0, total || 0);
+          }}
+          onPause={() => report(false)}
+          onEnded={() => report(true)}
+        />
+      </Suspense>
+    </div>
+  );
+}
+
+export function Player(props: PlayerProps) {
+  if (props.mode === "movi" && !nativePlayer)
+    return <MoviPlayerSurface {...props} />;
+  return <NuvioPlayer {...props} />;
+}
+
+function NuvioPlayer({
   stream,
   meta,
   video,
@@ -184,52 +374,7 @@ export function Player({
   blurUnwatchedEpisodes = false,
   animeSkipClientId = "",
   mode,
-}: {
-  stream: Stream;
-  meta: Meta;
-  video?: Video;
-  onClose(): void;
-  /**
-   * Hands the stream off to a player outside the browser. Raised rather than
-   * launched here: closing this player and recording where it got to are the
-   * app's to do, and both have to happen for the handoff to be worth anything.
-   */
-  onExternalPlay(
-    mode: ExternalPlayerMode,
-    url: string,
-    positionMs: number,
-  ): void;
-  /** Where to resume from. 0 starts at the beginning. */
-  startPositionMs?: number;
-  /**
-   * The run this episode belongs to, so the player can offer the next one and
-   * let another be chosen without leaving playback.
-   */
-  episodes?: Video[];
-  blurUnwatchedEpisodes?: boolean;
-  animeSkipClientId?: string;
-  watchIndex?: WatchIndex;
-  /**
-   * Which in-app player was chosen for this stream. "native" plays through the
-   * browser's own video element, remuxing Matroska for it, which is the only
-   * way to get audio Safari can decode but WebCodecs will not admit to.
-   */
-  mode?: ExternalPlayerMode;
-  /** Resolves a source for another episode and switches to it. */
-  onPlayEpisode?(next: Video): void;
-  /** Reports a resume point. Fired periodically, on pause, and on exit. */
-  onProgress(positionMs: number, durationMs: number, ended: boolean): void;
-  /**
-   * Mirrors a checkpoint that the native shell is already persisting.
-   * Browser playback never calls this; doing so would create a second writer.
-   */
-  onNativeProgressSnapshot?(
-    positionMs: number,
-    durationMs: number,
-    ended: boolean,
-  ): void;
-  settings: WebPlayerSettings;
-}) {
+}: PlayerProps) {
   const playerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);

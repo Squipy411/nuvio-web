@@ -134,6 +134,7 @@ import {
   canReturnToApp,
   isAndroid,
   canPlayInApp,
+  isInAppPlayer,
   isAppleMobile,
   isInstalledAppleWebApp,
   isMacOS,
@@ -526,9 +527,12 @@ export function App() {
     // "internal" is the default everywhere it exists. Where it does not, the
     // first player this device can actually use is a better start than a
     // setting that silently means nothing.
-    return canPlayInApp()
-      ? "internal"
-      : (platform.externalPlayer.options("settings")[0]?.mode ?? "copy");
+    if (canPlayInApp()) return "internal";
+    // Movi is an experiment, not the new recommendation. Outplayer remains
+    // the reliable first choice on iOS unless the viewer explicitly changes it.
+    if (isAppleMobile() && platform.externalPlayer.isAvailable("outplayer"))
+      return "outplayer";
+    return platform.externalPlayer.options("settings")[0]?.mode ?? "copy";
   });
   /**
    * The one thing this app reads from its own address.
@@ -2049,7 +2053,18 @@ export function App() {
             openTitle();
             return;
           }
+          if (!isInAppPlayer(externalPlayer)) {
+            handOffToExternalPlayer(
+              externalPlayer,
+              chosen.url || chosen.externalUrl!,
+              { ...meta, selectedVideoId: target.id },
+              meta.videos.find((entry) => entry.id === target.id) ?? target,
+              startAtBeginning ? 0 : undefined,
+            );
+            return;
+          }
           setPlayback({
+            mode: externalPlayer,
             stream: chosen,
             meta: { ...meta, selectedVideoId: target.id },
             video: meta.videos.find((entry) => entry.id === target.id) ?? target,
@@ -2062,7 +2077,7 @@ export function App() {
           openTitle();
         });
     },
-    [addons, debridRules, webSettings.player.reuseBingeGroup],
+    [addons, debridRules, externalPlayer, webSettings.player.reuseBingeGroup],
   );
 
   const dismissContinueCard = useCallback(
@@ -2589,6 +2604,7 @@ export function App() {
                   chosen.behaviorHints?.bingeGroup,
                 );
                 setPlayback({
+                  mode: current.mode,
                   stream: chosen,
                   meta: current.meta,
                   video: next,
@@ -2735,7 +2751,7 @@ export function App() {
             const url = stream.url || stream.externalUrl;
             // "native" plays here too — it is this app's video element, not
             // somebody else's application, so there is nothing to hand off.
-            if (chosen !== "internal" && chosen !== "native" && url) {
+            if (!isInAppPlayer(chosen) && url) {
               // Details stays open: the stream opened elsewhere, so this page
               // is exactly where you want to be when you come back.
               handOffToExternalPlayer(chosen, url, meta, video);
@@ -5210,7 +5226,7 @@ function SettingsPage({
               {isAndroid()
                 ? "Next Player, VLC, MX Player, mpv, and the Android video player chooser open through Android intents."
                 : isAppleMobile()
-                  ? "VLC, Outplayer, and Infuse open through Apple URL schemes."
+                  ? "Outplayer, VLC, and Infuse open as iOS apps. Movi Player is an experimental in-app WebCodecs/WASM player with its own controls."
                   : isMacOS()
                     ? "Infuse and IINA open through macOS URL schemes. VLC registers none on a Mac, so copy the link for it."
                     : "mpv opens through the mpv-handler helper, which has to be installed separately. Otherwise copy the link for your player."}

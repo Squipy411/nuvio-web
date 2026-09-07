@@ -161,7 +161,7 @@ test("a clock with nothing behind it says so", () => {
   );
 });
 
-test("iOS is not offered an in-app player, by one decision", () => {
+test("iOS is not offered Nuvio's legacy in-app player, by one decision", () => {
   // Safari cannot open Matroska, so every in-app route there has to do
   // something the platform will not — decode with WebCodecs, which has no
   // audio decoder on iOS, or remux and read the bytes, which the host has to
@@ -197,4 +197,34 @@ test("iOS is not offered an in-app player, by one decision", () => {
     /https\?:/i,
     "and downloads, which are local and play fine, must not be caught by it",
   );
+});
+
+test("Movi is an explicit experimental iOS player and Outplayer stays the default", () => {
+  const helpers = readFileSync(
+    new URL("../src/lib/externalPlayer.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    helpers,
+    /mode: "movi",[\s\S]*?label: "Movi Player \(Experimental\)"[\s\S]*?settings: \["apple-mobile"\]/,
+    "Movi should be visible on iOS without reviving the retired Nuvio canvas option",
+  );
+  assert.match(
+    helpers,
+    /mode === "internal" \|\| mode === "native" \|\| mode === "movi"/,
+    "Movi must render here instead of being launched as an external URL scheme",
+  );
+  const app = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+  assert.match(
+    app,
+    /isAppleMobile\(\) && platform\.externalPlayer\.isAvailable\("outplayer"\)/,
+    "the experiment must not silently replace the reliable iOS default",
+  );
+  const player = readFileSync(
+    new URL("../src/components/Player.tsx", import.meta.url),
+    "utf8",
+  );
+  assert.match(player, /import\("movi-player\/react\/slim"\)/, "the engine should load only when selected");
+  assert.match(player, /props\.mode === "movi"/, "the selected mode needs its own surface");
+  assert.match(player, /titlemode="both back"/, "Movi's own title and back UI should be enabled");
 });
