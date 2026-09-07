@@ -243,6 +243,13 @@ export type Stream = {
     };
   };
 };
+export type Subtitle = {
+  id: string;
+  url: string;
+  lang: string;
+  /** Distinguishes otherwise-identical languages from different providers. */
+  addonName: string;
+};
 export type LibraryItem = Meta & { addedAt?: number };
 export type ProgressRow = {
   contentId: string;

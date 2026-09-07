@@ -3122,6 +3122,33 @@ html.native-player-active.native-player-covered .player-view.native-player {
   background: #000;
   object-position: center center;
 }
+.player-subtitle-overlay {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  width: min(88%, 1100px);
+  transform: translateX(-50%);
+  text-align: center;
+  white-space: pre-line;
+  line-height: 1.35;
+  pointer-events: none;
+  transition: bottom 0.2s ease;
+}
+.player-subtitle-overlay > span {
+  padding: 2px 5px;
+  border-radius: 3px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.subtitle-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.subtitle-loading svg {
+  width: 17px;
+  height: 17px;
+}
 /* New HDR-aware browsers can deliberately cap an HDR surface at reference
    white. Older browsers ignore this declaration and continue using their own
    color-management path. */
@@ -5363,7 +5390,7 @@ body.is-locked {
 
 /* ---- Collection folders ------------------------------------------------ */
 .folder-tile {
-  flex: 0 0 170px;
+  flex: 0 0 var(--poster-width);
   padding: 0;
   border: 0;
   background: transparent;
@@ -5377,17 +5404,17 @@ body.is-locked {
   place-items: center;
   /* Poster is Nuvio's default shape, so it is the base here and the wider
      shapes override it rather than the other way round. */
-  aspect-ratio: 2/3;
+  aspect-ratio: var(--poster-aspect);
   overflow: hidden;
   border: 1px solid #293039;
-  border-radius: 14px;
+  border-radius: var(--poster-radius);
   background: linear-gradient(145deg, #1b2027, #12161b);
 }
 .folder-tile.shape-square .folder-art {
   aspect-ratio: 1;
 }
 .folder-tile.shape-landscape {
-  flex-basis: 268px;
+  flex-basis: max(var(--poster-width), 210px);
 }
 .folder-tile.shape-landscape .folder-art {
   aspect-ratio: 16/9;
@@ -5449,10 +5476,10 @@ body.is-locked {
     margin-top: 2px;
   }
   .folder-tile {
-    flex: 0 0 132px;
+    flex-basis: min(var(--poster-width), 42vw);
   }
   .folder-tile.shape-landscape {
-    flex-basis: 212px;
+    flex-basis: min(max(var(--poster-width), 210px), 76vw);
   }
 }
 
@@ -7552,13 +7579,9 @@ body.is-locked {
     padding-left: 0;
   }
 
-  /* Collection folders use a deliberate 170px poster tile. Home catalogs
-     should share that same shelf rhythm instead of shrinking to the global
-     126px grid preference. This is intentionally limited to shelf rows so
-     Library, Discover, and full catalog grids still respect poster settings. */
-  .media-section .media-row:not(.folder-row) .poster-card {
-    flex-basis: 170px;
-  }
+  /* Home catalog and Collection shelves both inherit --poster-width. Keeping
+     typography shared here preserves their shelf rhythm while still letting
+     the synced Appearance size control the actual cards. */
   .media-section .media-row:not(.folder-row) .poster-card > strong,
   .folder-row .folder-tile > strong {
     margin-top: 10px;

@@ -19,6 +19,7 @@ import type {
   ManifestCatalog,
   Meta,
   Stream,
+  Subtitle,
   Video,
 } from "../types";
 
@@ -1001,6 +1002,54 @@ export async function loadStreams(
     }),
   );
   return groups.flat();
+}
+
+/**
+ * External text tracks from every enabled Stremio subtitle addon.
+ *
+ * Only the small index is loaded here. A title can have hundreds of matches,
+ * so the player fetches just the subtitle file the viewer actually selects.
+ */
+export async function loadSubtitles(
+  type: string,
+  id: string,
+  addons: InstalledAddon[],
+  signal?: AbortSignal,
+): Promise<Subtitle[]> {
+  const targets = addons.filter(
+    (addon) =>
+      addon.enabled &&
+      addon.manifest &&
+      supports(addon.manifest, "subtitles", type),
+  );
+  const batches = await Promise.all(
+    targets.map(async (addon) => {
+      try {
+        const payload = await fetchJson<{
+          subtitles?: Array<Record<string, unknown>>;
+        }>(resourceUrl(addon.url, "subtitles", type, id), 14_000, signal);
+        return (payload.subtitles ?? []).flatMap((item, index): Subtitle[] => {
+          const url = item.url == null ? "" : String(item.url).trim();
+          if (!url) return [];
+          return [{
+            id: String(item.id ?? `${addon.manifest!.id}:${index}`),
+            url,
+            lang: String(item.lang ?? item.language ?? "").trim(),
+            addonName: addon.manifest!.name,
+          }];
+        });
+      } catch {
+        return [];
+      }
+    }),
+  );
+  return [
+    ...new Map(
+      batches
+        .flat()
+        .map((subtitle) => [subtitle.url, subtitle] as const),
+    ).values(),
+  ];
 }
 
 export type DiscoverCatalog = {

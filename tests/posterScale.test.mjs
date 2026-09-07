@@ -64,6 +64,16 @@ test("the stylesheet's fallback card is the same as the default", () => {
     css,
     new RegExp(`--poster-aspect: ${POSTER_DEFAULTS.widthDp} / ${POSTER_DEFAULTS.heightDp}`),
   );
+  assert.match(
+    css,
+    /\.folder-tile \{[^}]*flex: 0 0 var\(--poster-width\)/s,
+    "collection tiles must use the same size as catalog posters",
+  );
+  assert.doesNotMatch(
+    css,
+    /\.media-section \.media-row:not\(\.folder-row\) \.poster-card \{[^}]*flex-basis: 170px/s,
+    "desktop Home must not override the synced poster width",
+  );
 });
 
 test("the number fields hold what is typed rather than clamping each keystroke", () => {

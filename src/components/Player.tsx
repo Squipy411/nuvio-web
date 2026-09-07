@@ -14,6 +14,11 @@ import { platform } from "../platform/index.ts";
 import { t } from "../lib/i18n.ts";
 import { canPlayInApp } from "../lib/externalPlayer";
 import { languageName } from "../lib/languageName.ts";
+import { loadSubtitles } from "../lib/addons.ts";
+import {
+  parseBrowserSubtitles,
+  type BrowserSubtitleCue,
+} from "../lib/subtitles.ts";
 import type { ResizeMode, PlayerState } from "../platform/types.ts";
 import { safeHttpUrl } from "../lib/security";
 import {
@@ -90,7 +95,14 @@ import {
   skipLabel,
   type SkipSegment,
 } from "../lib/skipSegments";
-import type { ExternalPlayerMode, Meta, Stream, Video } from "../types";
+import type {
+  ExternalPlayerMode,
+  InstalledAddon,
+  Meta,
+  Stream,
+  Subtitle,
+  Video,
+} from "../types";
 
 // Present only in the desktop shell. Keeping this capability check here makes
 // the player chrome shared while the bytes still take the right route: a web
@@ -230,6 +242,8 @@ export type PlayerProps = {
   stream: Stream;
   meta: Meta;
   video?: Video;
+  /** Subtitle providers are queried only by the browser player. */
+  addons?: InstalledAddon[];
   onClose(): void;
   onExternalPlay(
     mode: ExternalPlayerMode,
@@ -269,6 +283,7 @@ export function Player({
   stream,
   meta,
   video,
+  addons = [],
   onClose,
   onExternalPlay,
   onProgress,
@@ -396,11 +411,37 @@ export function Player({
   const [subtitleTracks, setSubtitleTracks] = useState<
     Array<{ id: number; lang: string; label: string }>
   >([]);
+  const [addonSubtitles, setAddonSubtitles] = useState<Subtitle[]>([]);
+  const [browserSubtitleCues, setBrowserSubtitleCues] = useState<
+    BrowserSubtitleCue[]
+  >([]);
+  const [subtitleIndexBusy, setSubtitleIndexBusy] = useState(false);
+  const [subtitleFileBusy, setSubtitleFileBusy] = useState(false);
+  const subtitleFileGeneration = useRef(0);
   /** mpv's own convention: -1, or "no", means subtitles are off. */
   const [selectedSubtitle, setSelectedSubtitle] = useState(-1);
   const [externalPlayerOpen, setExternalPlayerOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
   const [episodesOpen, setEpisodesOpen] = useState(false);
+
+  useEffect(() => {
+    if (nativePlayer) return;
+    const controller = new AbortController();
+    const subtitleId = video?.id || meta.id;
+    subtitleFileGeneration.current += 1;
+    setAddonSubtitles([]);
+    setBrowserSubtitleCues([]);
+    setSelectedSubtitle(-1);
+    setSubtitleIndexBusy(true);
+    void loadSubtitles(meta.type, subtitleId, addons, controller.signal)
+      .then((tracks) => {
+        if (!controller.signal.aborted) setAddonSubtitles(tracks);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setSubtitleIndexBusy(false);
+      });
+    return () => controller.abort();
+  }, [addons, meta.id, meta.type, video?.id]);
   /** Dismissed by hand, so it does not come back for the rest of the episode. */
   const [nextDismissed, setNextDismissed] = useState(false);
   const [skipSegments, setSkipSegments] = useState<SkipSegment[]>([]);
@@ -1629,13 +1670,6 @@ export function Player({
   }, []);
 
   /**
-   * Subtitle track, including turning them off.
-   *
-   * Native only. A browser video's text tracks are already driven by the
-   * element and its own cue rendering, so the control is not built there —
-   * there is nothing for it to switch between that the page did not put there.
-   */
-  /**
    * The subtitle tracks worth offering.
    *
    * A release with forty language tracks made this menu a wall, and the account
@@ -1646,55 +1680,154 @@ export function Player({
    * The filter never empties the menu: if nothing matches, everything is shown,
    * because a list of nothing is worse than a long one.
    */
+  const browserSubtitleTracks = useMemo(
+    () =>
+      addonSubtitles.map((track, id) => ({
+        id,
+        lang: track.lang,
+        label: `${languageName(track.lang) || "Unknown"} · ${track.addonName}`,
+      })),
+    [addonSubtitles],
+  );
+  const offeredSubtitleTracks = nativePlayer
+    ? subtitleTracks
+    : browserSubtitleTracks;
   const visibleSubtitleTracks = useMemo(() => {
-    if (!settings.subtitleShowOnlyPreferredLanguages) return subtitleTracks;
+    if (!settings.subtitleShowOnlyPreferredLanguages)
+      return offeredSubtitleTracks;
     const wanted = [
       settings.preferredSubtitleLanguage,
       settings.secondaryPreferredSubtitleLanguage,
     ]
-      .map((value) => value.trim().toLowerCase())
+      .map((value) => languageName(value).trim().toLowerCase())
       .filter(
         (value) =>
           value && !["none", "device", "forced", "default"].includes(value),
       );
-    if (!wanted.length) return subtitleTracks;
-    const matching = subtitleTracks.filter((track) =>
-      wanted.some((code) => track.lang.toLowerCase().startsWith(code)),
+    if (!wanted.length) return offeredSubtitleTracks;
+    const matching = offeredSubtitleTracks.filter((track) =>
+      wanted.includes(languageName(track.lang).toLowerCase()),
     );
-    return matching.length ? matching : subtitleTracks;
+    return matching.length ? matching : offeredSubtitleTracks;
   }, [
-    subtitleTracks,
+    offeredSubtitleTracks,
     settings.subtitleShowOnlyPreferredLanguages,
     settings.preferredSubtitleLanguage,
     settings.secondaryPreferredSubtitleLanguage,
   ]);
 
-  /**
-   * Only where a track can actually be chosen.
-   *
-   * The browser route applies a preferred subtitle to the video element's own
-   * text tracks and offers no picker, so a Captions row there would open a
-   * page with nothing on it but "Off".
-   */
-  const canPickSubtitles = !!nativePlayer;
+  const canPickSubtitles =
+    !!nativePlayer || subtitleIndexBusy || browserSubtitleTracks.length > 0;
   /** What the settings list shows beside each row, YouTube-fashion. */
   const selectedSubtitleLabel =
-    subtitleTracks.find((track) => track.id === selectedSubtitle)?.label ??
+    offeredSubtitleTracks.find((track) => track.id === selectedSubtitle)?.label ??
     t("player.off");
   const selectedAudioLabel =
     audioTracks.find((track) => track.id === selectedAudio)?.label ??
     audioTracks[0]?.label ??
     "Default";
 
-  const selectSubtitle = (id: number) => {
-    setSelectedSubtitle(id);
+  const selectSubtitle = useCallback(async (id: number) => {
+    const generation = ++subtitleFileGeneration.current;
     setSettingsPage(null);
-    void nativePlayer?.setSubtitleTrack(id).catch((reason: unknown) =>
-      setError(
-        reason instanceof Error ? reason.message : "Could not select subtitles.",
-      ),
-    );
-  };
+    if (nativePlayer) {
+      setSelectedSubtitle(id);
+      await nativePlayer.setSubtitleTrack(id).catch((reason: unknown) =>
+        setError(
+          reason instanceof Error ? reason.message : "Could not select subtitles.",
+        ),
+      );
+      return;
+    }
+    if (id < 0) {
+      setSelectedSubtitle(-1);
+      setBrowserSubtitleCues([]);
+      setSubtitleFileBusy(false);
+      return;
+    }
+    const track = addonSubtitles[id];
+    const subtitleUrl = safeHttpUrl(track?.url);
+    if (!track || !subtitleUrl) {
+      setWarning("That subtitle URL is not safe to open.");
+      return;
+    }
+    setSelectedSubtitle(id);
+    setBrowserSubtitleCues([]);
+    setSubtitleFileBusy(true);
+    try {
+      const response = await platform.request(subtitleUrl, {
+        timeoutMs: 15_000,
+        maxBytes: 4 * 1024 * 1024,
+      });
+      if (!response.ok) throw new Error(`Subtitle host returned HTTP ${response.status}.`);
+      const cues = parseBrowserSubtitles(response.body);
+      if (!cues.length)
+        throw new Error("This subtitle is not a readable WebVTT or SRT file.");
+      if (generation === subtitleFileGeneration.current)
+        setBrowserSubtitleCues(cues);
+    } catch (reason) {
+      if (generation !== subtitleFileGeneration.current) return;
+      setSelectedSubtitle(-1);
+      setWarning(
+        reason instanceof Error ? reason.message : "Could not load subtitles.",
+      );
+    } finally {
+      if (generation === subtitleFileGeneration.current)
+        setSubtitleFileBusy(false);
+    }
+  }, [addonSubtitles]);
+
+  const autoSubtitleFor = useRef("");
+  useEffect(() => {
+    if (nativePlayer || subtitleIndexBusy || !browserSubtitleTracks.length) return;
+    const key = `${meta.type}:${video?.id || meta.id}`;
+    if (autoSubtitleFor.current === key) return;
+    autoSubtitleFor.current = key;
+    const preferred = settings.preferredSubtitleLanguage;
+    if (!preferred || preferred === "none") return;
+    const requested = [
+      ...(preferred === "device"
+        ? navigator.languages?.length
+          ? [...navigator.languages]
+          : [navigator.language]
+        : [preferred]),
+      settings.secondaryPreferredSubtitleLanguage,
+    ]
+      .map((value) => languageName(value).toLowerCase())
+      .filter(Boolean);
+    const forcedFirst = settings.subtitleUseForcedSubtitles;
+    const candidates = browserSubtitleTracks
+      .map((track, index) => ({ track, index }))
+      .filter(({ track }) =>
+        requested.includes(languageName(track.lang).toLowerCase()),
+      );
+    const chosen =
+      (forcedFirst
+        ? candidates.find(({ track }) => /forced/i.test(track.label))
+        : undefined) ?? candidates[0];
+    if (chosen) void selectSubtitle(chosen.index);
+  }, [
+    browserSubtitleTracks,
+    meta.id,
+    meta.type,
+    selectSubtitle,
+    settings.preferredSubtitleLanguage,
+    settings.secondaryPreferredSubtitleLanguage,
+    settings.subtitleUseForcedSubtitles,
+    subtitleIndexBusy,
+    video?.id,
+  ]);
+
+  const activeBrowserSubtitle = useMemo(
+    () =>
+      nativePlayer || selectedSubtitle < 0
+        ? ""
+        : browserSubtitleCues
+            .filter((cue) => currentTime >= cue.start && currentTime < cue.end)
+            .map((cue) => cue.text)
+            .join("\n"),
+    [browserSubtitleCues, currentTime, selectedSubtitle],
+  );
 
   const selectAudio = (id: number) => {
     if (nativePlayer) {
@@ -1991,6 +2124,32 @@ export function Player({
         onClick={handleSurfaceClick}
         onDoubleClick={handleSurfaceDoubleClick}
       />
+      {!nativePlayer && activeBrowserSubtitle && (
+        <div
+          className="player-subtitle-overlay"
+          style={{
+            bottom: `calc(${clamp(settings.subtitleBottomOffset, 0, 100)}px + ${controlsVisible ? 92 : 0}px + env(safe-area-inset-bottom))`,
+            color: browserColor(settings.subtitleTextColor, "#fff"),
+            fontSize: `${clamp(settings.subtitleFontSizeSp, 6, 40)}px`,
+            fontWeight: settings.subtitleBold ? 700 : 400,
+            textShadow: settings.subtitleOutlineEnabled
+              ? `${settings.subtitleOutlineWidth}px 0 ${browserColor(settings.subtitleOutlineColor, "#000")}, -${settings.subtitleOutlineWidth}px 0 ${browserColor(settings.subtitleOutlineColor, "#000")}, 0 ${settings.subtitleOutlineWidth}px ${browserColor(settings.subtitleOutlineColor, "#000")}, 0 -${settings.subtitleOutlineWidth}px ${browserColor(settings.subtitleOutlineColor, "#000")}`
+              : "none",
+          }}
+          aria-live="off"
+        >
+          <span
+            style={{
+              background: browserColor(
+                settings.subtitleBackgroundColor,
+                "transparent",
+              ),
+            }}
+          >
+            {activeBrowserSubtitle}
+          </span>
+        </div>
+      )}
       <div className="player-shade player-shade-top" />
       <div className="player-shade player-shade-bottom" />
       <div className="player-top">
@@ -2174,7 +2333,7 @@ export function Player({
                         {t("player.subtitles")}
                       </span>
                       <em>
-                        {selectedSubtitleLabel}
+                        {subtitleFileBusy ? "Loading…" : selectedSubtitleLabel}
                         <ChevronRight />
                       </em>
                     </button>
@@ -2268,9 +2427,11 @@ export function Player({
                       {track.label}
                     </button>
                   ))}
-                  {!subtitleTracks.length && (
-                    <p>This source carries no subtitle tracks.</p>
-                  )}
+                  {subtitleIndexBusy ? (
+                    <p className="subtitle-loading"><LoaderCircle className="spin" /> Loading subtitles…</p>
+                  ) : !offeredSubtitleTracks.length ? (
+                    <p>No subtitle addon returned a track for this title.</p>
+                  ) : null}
                 </div>
               )}
               {settingsPage === "audio" && (

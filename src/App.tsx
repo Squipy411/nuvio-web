@@ -2605,6 +2605,7 @@ export function App() {
            rebuilt home from scratch and only then re-opened details. */
         <Player
           {...playback}
+          addons={addons}
           settings={webSettings.player}
           blurUnwatchedEpisodes={webSettings.metaScreen.blurUnwatchedEpisodes}
           episodeCardStyle={webSettings.metaScreen.episodeCardStyle}
