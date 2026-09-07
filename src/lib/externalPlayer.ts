@@ -169,12 +169,15 @@ const externalPlayerDefinitions: readonly ExternalPlayerDefinition[] = [
     reportsBack: true,
   },
   {
-    // This is deliberately opt-in. It can decode Matroska in Safari through
-    // WebCodecs + WASM, but that costs substantially more memory than handing
-    // the same file to Outplayer and still depends on the media host's CORS.
+    // This is deliberately opt-in. It can decode Matroska in browsers through
+    // WebCodecs + WASM, but that costs substantially more memory than native
+    // playback and still depends on the media host's CORS/range behaviour.
     mode: "movi",
     label: "Movi Player (Experimental)",
-    platforms: { settings: ["apple-mobile"], player: ["apple-mobile"] },
+    platforms: {
+      settings: ["apple-mobile", "macos", "desktop"],
+      player: ["apple-mobile", "macos", "desktop"],
+    },
     reportsBack: true,
   },
   {

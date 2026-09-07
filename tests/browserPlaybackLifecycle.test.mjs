@@ -199,15 +199,15 @@ test("iOS is not offered Nuvio's legacy in-app player, by one decision", () => {
   );
 });
 
-test("Movi is an explicit experimental iOS player and Outplayer stays the default", () => {
+test("Movi is an explicit experimental browser player and Outplayer stays the iOS default", () => {
   const helpers = readFileSync(
     new URL("../src/lib/externalPlayer.ts", import.meta.url),
     "utf8",
   );
   assert.match(
     helpers,
-    /mode: "movi",[\s\S]*?label: "Movi Player \(Experimental\)"[\s\S]*?settings: \["apple-mobile"\]/,
-    "Movi should be visible on iOS without reviving the retired Nuvio canvas option",
+    /mode: "movi",[\s\S]*?label: "Movi Player \(Experimental\)"[\s\S]*?settings: \["apple-mobile", "macos", "desktop"\]/,
+    "Movi should be visible in iOS and desktop browsers without reviving the retired Nuvio canvas option",
   );
   assert.match(
     helpers,
