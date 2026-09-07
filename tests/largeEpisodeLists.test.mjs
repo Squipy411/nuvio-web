@@ -26,6 +26,13 @@ test("very large seasons keep only a viewport-sized window mounted", () => {
   assert.ok(spacers.afterSize > 0);
 });
 
+test("short virtualized seasons leave unused panel space below fixed-height rows", () => {
+  assert.match(
+    styles,
+    /\.episode-list\s*\{[\s\S]*?align-content:\s*start;[\s\S]*?grid-auto-rows:\s*max-content;/,
+  );
+});
+
 test("source selectors occupy their own bounded row", () => {
   assert.match(styles, /\.source-column > header\s*\{[^}]*display:\s*grid/s);
   assert.match(styles, /\.source-sheet-tools\s*\{[^}]*grid-column:\s*1\s*\/\s*-1[^}]*grid-row:\s*2/s);

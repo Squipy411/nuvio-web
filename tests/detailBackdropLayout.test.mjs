@@ -15,8 +15,15 @@ test("detail artwork height is independent from description height", () => {
   const detailHeroMarkup = details.slice(detailHeroStart, details.indexOf(">", detailHeroStart));
 
   assert.match(styles, /\.detail-hero::before\s*\{[\s\S]*?height:\s*var\(--detail-art-height\);/);
-  assert.match(styles, /--detail-art-height:\s*min\(720px, 82vh\)/);
-  assert.match(styles, /--detail-art-height:\s*clamp\(620px, 84svh, 880px\)/);
+  assert.match(styles, /--detail-hero-height:\s*min\(720px, 82vh\)/);
+  assert.match(styles, /--detail-hero-height:\s*clamp\(620px, 84svh, 880px\)/);
   assert.doesNotMatch(detailHeroMarkup, /backgroundImage/);
   assert.match(detailHeroMarkup, /"--detail-backdrop"/);
+});
+
+test("desktop details reveal the full-width backdrop behind credits and cast", () => {
+  assert.match(styles, /\.detail-view \.detail-hero::before\s*\{[\s\S]*?aspect-ratio:\s*16 \/ 9;/);
+  assert.match(styles, /background-size:\s*100% 100%, 100% 100%, 100% auto;/);
+  assert.match(styles, /\.detail-view\.background-cinematic \.detail-sections\s*\{\s*background:\s*transparent;/);
+  assert.match(styles, /\.detail-credits\s*\{[\s\S]*?border-top:\s*0;/);
 });

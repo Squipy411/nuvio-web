@@ -868,13 +868,22 @@ a {
     background-color: var(--app-bg);
   }
   .detail-view.background-cinematic .detail-sections {
-    background: var(--app-bg);
+    background: transparent;
   }
   .detail-view .detail-hero {
-    --detail-art-height: min(720px, 82vh);
-    min-height: var(--detail-art-height);
+    --detail-hero-height: min(720px, 82vh);
+    min-height: var(--detail-hero-height);
     align-items: center;
     padding: 92px 7vw 58px;
+  }
+  /* A backdrop is normally 16:9. Let its own full-width ratio determine how
+     far it runs down the page instead of cropping it into the content-height
+     hero box. The overflow deliberately continues behind credits and cast. */
+  .detail-view .detail-hero::before {
+    height: auto;
+    min-height: var(--detail-hero-height);
+    aspect-ratio: 16 / 9;
+    background-size: 100% 100%, 100% 100%, 100% auto;
   }
   .detail-copy {
     display: flex;
@@ -1038,10 +1047,11 @@ a {
   font-weight: 800;
 }
 .detail-hero {
+  --detail-hero-height: 680px;
   --detail-art-height: 680px;
   position: relative;
   isolation: isolate;
-  min-height: var(--detail-art-height);
+  min-height: var(--detail-hero-height);
   background-image: none;
   display: flex;
   align-items: flex-end;
@@ -1159,6 +1169,12 @@ a {
 }
 .episode-list {
   display: grid;
+  /* A short season inside the fixed-height desktop panel must leave empty
+     space below it. Grid's default `align-content: stretch` distributed that
+     space through the rendered virtual rows, turning a few episodes into huge
+     cards and then teaching the virtualizer that the huge size was normal. */
+  align-content: start;
+  grid-auto-rows: max-content;
   gap: 10px;
 }
 .episode-list-spacer {
@@ -2772,8 +2788,9 @@ a {
     width: 100%;
   }
   .detail-hero {
+    --detail-hero-height: 610px;
     --detail-art-height: 610px;
-    min-height: var(--detail-art-height);
+    min-height: var(--detail-hero-height);
     padding: 105px 20px 42px;
   }
   .detail-copy h1 {
@@ -4014,7 +4031,7 @@ html.native-player-active.native-player-covered .player-view.native-player {
   flex-wrap: wrap;
   gap: 44px;
   padding: 28px 7vw;
-  border-top: 1px solid #ffffff12;
+  border-top: 0;
 }
 .detail-credits > div {
   display: grid;
@@ -6965,8 +6982,9 @@ body.is-locked {
      * percentage stops below mean something — they are positions on the
      * artwork.
      */
-    --detail-art-height: clamp(620px, 84svh, 880px);
-    min-height: var(--detail-art-height);
+    --detail-hero-height: clamp(620px, 84svh, 880px);
+    --detail-art-height: var(--detail-hero-height);
+    min-height: var(--detail-hero-height);
     align-items: flex-start;
     justify-content: flex-start;
     /* Puts the title around 56% down the artwork, which is where the official
@@ -6975,6 +6993,9 @@ body.is-locked {
     text-align: center;
   }
   .detail-hero::before {
+    height: var(--detail-art-height);
+    min-height: 0;
+    aspect-ratio: auto;
     background-image:
       linear-gradient(
         to bottom,
@@ -7645,8 +7666,8 @@ body.is-locked {
     margin-right: clamp(430px, 31vw, 520px);
   }
   .detail-view.has-episode-panel .detail-hero {
-    --detail-art-height: 590px;
-    min-height: var(--detail-art-height);
+    --detail-hero-height: 590px;
+    min-height: var(--detail-hero-height);
     align-items: flex-end;
     padding: 100px 5vw 48px;
   }
