@@ -4740,6 +4740,31 @@ body.is-locked {
 .episode-roulette .library-roulette-frame {
   height: 230px;
 }
+.episode-roulette-setup {
+  flex-wrap: nowrap;
+}
+.episode-roulette-scope {
+  display: grid;
+  gap: 5px;
+  color: #858f99;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.episode-roulette-scope select {
+  min-width: 170px;
+  padding: 10px 34px 10px 13px;
+  border: 1px solid var(--panel-border);
+  border-radius: 11px;
+  background: #0d1014;
+  color: #f1f4f7;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: normal;
+  text-transform: none;
+}
 .episode-roulette.finished .library-roulette-frame {
   height: 330px;
 }
@@ -4783,6 +4808,18 @@ body.is-locked {
   }
   .episode-roulette .library-roulette-frame {
     height: 190px;
+  }
+  .episode-roulette-setup {
+    align-items: end;
+    flex-direction: row;
+  }
+  .episode-roulette-scope {
+    flex: 1;
+    min-width: 0;
+  }
+  .episode-roulette-scope select {
+    width: 100%;
+    min-width: 0;
   }
   .episode-roulette.finished .library-roulette-frame {
     height: 300px;
