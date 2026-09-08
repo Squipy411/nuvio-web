@@ -57,9 +57,12 @@ import {
   ListVideo,
   LoaderCircle,
   Maximize,
+  Minus,
   Play,
+  Plus,
   Settings,
   SkipForward,
+  SlidersHorizontal,
   Volume2,
   VolumeX,
   X,
@@ -230,6 +233,67 @@ function sourceKey(item: Stream) {
   );
 }
 
+/** The parts of a caption's appearance the player can change while it plays. */
+export type SubtitleStylePatch = Partial<
+  Pick<
+    WebPlayerSettings,
+    | "subtitleFontSizeSp"
+    | "subtitleBottomOffset"
+    | "subtitleTextColor"
+    | "subtitleBackgroundColor"
+    | "subtitleOutlineColor"
+    | "subtitleOutlineEnabled"
+    | "subtitleOutlineWidth"
+    | "subtitleBold"
+  >
+>;
+
+/**
+ * Colours offered for caption text and its background, as Android ARGB — the
+ * shape these are stored in, and the shape every other Nuvio client reads.
+ *
+ * A short list on purpose: this is a menu over a running film, and a colour
+ * wheel there is a worse answer than eight colours that are all legible.
+ */
+const CAPTION_COLORS: Array<{ name: string; value: string }> = [
+  { name: "White", value: "#FFFFFFFF" },
+  { name: "Yellow", value: "#FFFFEB3B" },
+  { name: "Cyan", value: "#FF4DD0E1" },
+  { name: "Green", value: "#FF81C784" },
+  { name: "Orange", value: "#FFFFB74D" },
+  { name: "Pink", value: "#FFF06292" },
+  { name: "Grey", value: "#FFBDBDBD" },
+  { name: "Black", value: "#FF000000" },
+];
+
+/** Backgrounds behind the text, transparent first because it is the default. */
+const CAPTION_BACKGROUNDS: Array<{ name: string; value: string }> = [
+  { name: "None", value: "#00000000" },
+  { name: "Dim", value: "#66000000" },
+  { name: "Black", value: "#CC000000" },
+  { name: "Solid", value: "#FF000000" },
+  { name: "White", value: "#CCFFFFFF" },
+];
+
+/** What the steppers will go to; the same bounds the settings page enforces. */
+const CAPTION_SIZE_MIN = 6;
+const CAPTION_SIZE_MAX = 40;
+const CAPTION_OFFSET_MAX = 100;
+
+/**
+ * Whether a stored colour is the swatch that was offered.
+ *
+ * Compared through the CSS form rather than the stored text: the same colour
+ * arrives written as `#FFFFFFFF` from one client and `#ffffffff` from another,
+ * and a swatch that never looks selected reads as one that does not work.
+ */
+function sameColor(stored: string, option: string) {
+  return (
+    browserColor(stored, "").toLowerCase() ===
+    browserColor(option, "").toLowerCase()
+  );
+}
+
 /** The release name an addon put on a source, as the sheet shows it. */
 function sourceLabel(item: Stream) {
   return (
@@ -264,6 +328,14 @@ export type PlayerProps = {
   sources?: Stream[];
   /** So the picker's rows carry the badges the sources sheet gives them. */
   streamBadgeSettings?: StreamBadgeSettings;
+  /**
+   * Changes how captions look, from the player rather than from Settings.
+   *
+   * The same stored values either way, so what is set here over the picture is
+   * what Settings shows afterwards — and on the web it lands immediately,
+   * since the cue stylesheet is built from them.
+   */
+  onSubtitleStyle?(patch: SubtitleStylePatch): void;
   sourcesBusy?: boolean;
   /** Asked for when the picker is first opened, not before. */
   onRequestSources?(): void;
@@ -301,6 +373,7 @@ export function Player({
   tmdbConfig,
   sources,
   streamBadgeSettings,
+  onSubtitleStyle,
   sourcesBusy = false,
   onRequestSources,
   onSelectSource,
@@ -403,7 +476,7 @@ export function Player({
    * asked for it was, and the way back is the heading above it.
    */
   const [settingsPage, setSettingsPage] = useState<
-    null | "root" | "captions" | "captionVersions" | "audio" | "speed"
+    null | "root" | "captions" | "captionVersions" | "audio" | "speed" | "captionStyle"
   >(null);
   const [subtitleGroupKey, setSubtitleGroupKey] = useState<string | null>(null);
   /**
@@ -661,6 +734,40 @@ export function Player({
       : "none";
     return `.player-view video::cue { color:${color}; background:${background}; font-size:${clamp(settings.subtitleFontSizeSp, 6, 40)}px; font-weight:${settings.subtitleBold ? 700 : 400}; text-shadow:${shadow}; }`;
   }, [settings]);
+
+  /**
+   * The sample line in the customiser, drawn from the same values as the cue
+   * stylesheet — so what it shows is what the captions under it are doing.
+   */
+  const cuePreviewStyle = useMemo(() => {
+    const outline = browserColor(settings.subtitleOutlineColor, "#000");
+    const width = clamp(settings.subtitleOutlineWidth, 0, 10);
+    return {
+      color: browserColor(settings.subtitleTextColor, "#fff"),
+      background: browserColor(settings.subtitleBackgroundColor, "transparent"),
+      fontSize: `${clamp(settings.subtitleFontSizeSp, CAPTION_SIZE_MIN, CAPTION_SIZE_MAX)}px`,
+      fontWeight: settings.subtitleBold ? 700 : 400,
+      textShadow: settings.subtitleOutlineEnabled
+        ? `${width}px 0 ${outline}, -${width}px 0 ${outline}, 0 ${width}px ${outline}, 0 -${width}px ${outline}`
+        : "none",
+    } as CSSProperties;
+  }, [settings]);
+  const stepCaptionSize = (by: number) =>
+    onSubtitleStyle?.({
+      subtitleFontSizeSp: clamp(
+        settings.subtitleFontSizeSp + by,
+        CAPTION_SIZE_MIN,
+        CAPTION_SIZE_MAX,
+      ),
+    });
+  const stepCaptionOffset = (by: number) =>
+    onSubtitleStyle?.({
+      subtitleBottomOffset: clamp(
+        settings.subtitleBottomOffset + by,
+        0,
+        CAPTION_OFFSET_MAX,
+      ),
+    });
 
   const showControls = useCallback(() => {
     setControlsVisible(true);
@@ -2503,6 +2610,24 @@ export function Player({
                     <ChevronLeft />
                     <strong>{t("player.subtitles")}</strong>
                   </button>
+                  {/* How they look, next to which one is showing. Both are
+                      questions about the captions in front of you, and having
+                      to leave playback for the second one is why nobody ever
+                      found it. */}
+                  {onSubtitleStyle && (
+                    <button
+                      className="settings-row"
+                      onClick={() => setSettingsPage("captionStyle")}
+                    >
+                      <span>
+                        <SlidersHorizontal />
+                        {t("player.captionStyle")}
+                      </span>
+                      <em>
+                        <ChevronRight />
+                      </em>
+                    </button>
+                  )}
                   {/* Always offered, even with no tracks: turning subtitles
                       off is the thing most often wanted here, and it has to be
                       reachable whatever the file contains. */}
@@ -2580,6 +2705,120 @@ export function Player({
                       {track.variantLabel}
                     </button>
                   ))}
+                </div>
+              )}
+              {settingsPage === "captionStyle" && (
+                <div className="audio-menu settings-menu caption-style-menu">
+                  <button
+                    className="settings-back"
+                    onClick={() => setSettingsPage("captions")}
+                  >
+                    <ChevronLeft />
+                    <strong>{t("player.captionStyle")}</strong>
+                  </button>
+                  {/* Live, on the captions actually on screen. The stored
+                      values are the ones Settings edits, so this is the same
+                      preference reached from where you can see its effect. */}
+                  {/* The style rides on the line, not the box: the box is a
+                      checked ground, and a transparent caption background has
+                      to be seen through to mean anything. */}
+                  <p className="caption-style-preview">
+                    <span style={cuePreviewStyle}>The quick brown fox</span>
+                  </p>
+                  <div className="settings-row caption-style-step">
+                    <span>Text size</span>
+                    <em>
+                      <button
+                        aria-label="Smaller text"
+                        disabled={settings.subtitleFontSizeSp <= CAPTION_SIZE_MIN}
+                        onClick={() => stepCaptionSize(-2)}
+                      >
+                        <Minus />
+                      </button>
+                      <i>{settings.subtitleFontSizeSp}</i>
+                      <button
+                        aria-label="Larger text"
+                        disabled={settings.subtitleFontSizeSp >= CAPTION_SIZE_MAX}
+                        onClick={() => stepCaptionSize(2)}
+                      >
+                        <Plus />
+                      </button>
+                    </em>
+                  </div>
+                  <div className="settings-row caption-style-step">
+                    <span>Position</span>
+                    <em>
+                      <button
+                        aria-label="Lower"
+                        disabled={settings.subtitleBottomOffset <= 0}
+                        onClick={() => stepCaptionOffset(-5)}
+                      >
+                        <Minus />
+                      </button>
+                      <i>{settings.subtitleBottomOffset}</i>
+                      <button
+                        aria-label="Higher"
+                        disabled={settings.subtitleBottomOffset >= CAPTION_OFFSET_MAX}
+                        onClick={() => stepCaptionOffset(5)}
+                      >
+                        <Plus />
+                      </button>
+                    </em>
+                  </div>
+                  <div className="caption-style-swatches">
+                    <small>Text colour</small>
+                    <div>
+                      {CAPTION_COLORS.map((option) => (
+                        <button
+                          key={option.value}
+                          title={option.name}
+                          aria-label={option.name}
+                          aria-pressed={sameColor(settings.subtitleTextColor, option.value)}
+                          className={sameColor(settings.subtitleTextColor, option.value) ? "selected" : ""}
+                          style={{ "--swatch": browserColor(option.value, "#fff") } as CSSProperties}
+                          onClick={() => onSubtitleStyle?.({ subtitleTextColor: option.value })}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <div className="caption-style-swatches">
+                    <small>Background</small>
+                    <div>
+                      {CAPTION_BACKGROUNDS.map((option) => (
+                        <button
+                          key={option.value}
+                          title={option.name}
+                          aria-label={option.name}
+                          aria-pressed={sameColor(settings.subtitleBackgroundColor, option.value)}
+                          className={`${sameColor(settings.subtitleBackgroundColor, option.value) ? "selected" : ""}${option.value.startsWith("#00") ? " is-none" : ""}`}
+                          style={{ "--swatch": browserColor(option.value, "transparent") } as CSSProperties}
+                          onClick={() => onSubtitleStyle?.({ subtitleBackgroundColor: option.value })}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <label className="settings-row settings-switch">
+                    <span>Outline</span>
+                    <input
+                      type="checkbox"
+                      checked={settings.subtitleOutlineEnabled}
+                      onChange={(event) =>
+                        onSubtitleStyle?.({
+                          subtitleOutlineEnabled: event.target.checked,
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="settings-row settings-switch">
+                    <span>Bold</span>
+                    <input
+                      type="checkbox"
+                      checked={settings.subtitleBold}
+                      onChange={(event) =>
+                        onSubtitleStyle?.({ subtitleBold: event.target.checked })
+                      }
+                    />
+                  </label>
                 </div>
               )}
               {settingsPage === "audio" && (

@@ -61,6 +61,13 @@ import {
  */
 const STAGE_TIMEOUT_MS = 30_000;
 const READ_TIMEOUT_MS = 90_000;
+/**
+ * How long the sound waits for the picture before starting without it.
+ *
+ * Long enough to cover re-opening a decoder at a keyframe; short enough that a
+ * file whose video never decodes is not silent as well as blank.
+ */
+const PICTURE_WAIT_MS = 2_000;
 
 /** Registered once per page, and only when something actually needs it. */
 let dolbyDecoder: Promise<void> | null = null;
@@ -258,6 +265,21 @@ export class MediabunnyPlayer {
   private pausedAt = 0;
   private contextStartTime = 0;
   private startedFrom = 0;
+  /**
+   * Held from starting playback until the picture is actually back.
+   *
+   * Resuming re-opens the video decoder at the keyframe before the resume
+   * point, which on a long-GOP 4K file is a second or two of work. Audio has
+   * no such cost. The clock used to start the moment `play` was called, so the
+   * sound ran on while the canvas still held the frame it was paused on, and
+   * the picture then raced through the backlog to catch up. Now nothing counts
+   * until a frame has been drawn: the wait shows as a brief buffer rather than
+   * as a frozen film with the dialogue continuing over it.
+   */
+  private pictureReady: Promise<void> = Promise.resolve();
+  private releasePicture: (() => void) | null = null;
+  /** True from starting playback until that first frame. */
+  private priming = false;
   private volume = 1;
   private muted = false;
   private stableVolume = false;
@@ -287,7 +309,9 @@ export class MediabunnyPlayer {
   }
 
   get currentTime() {
-    if (!this.playing) return this.pausedAt;
+    // Priming counts as stopped: the clock has no origin yet, and reporting
+    // one would move the seekbar and the subtitles ahead of the picture.
+    if (!this.playing || this.priming) return this.pausedAt;
     return (
       this.startedFrom +
       (this.clockTime() - this.contextStartTime) * this.playbackRate
@@ -764,6 +788,8 @@ export class MediabunnyPlayer {
   stop() {
     this.stopped = true;
     this.playing = false;
+    this.priming = false;
+    this.releasePicture = null;
     this.generation += 1;
     this.silence();
     if (this.frameHandle !== null) cancelAnimationFrame(this.frameHandle);
@@ -854,6 +880,29 @@ export class MediabunnyPlayer {
       this.report("error", error instanceof Error ? error.message : "Decoding failed");
       this.stop();
     };
+    // Video leads. Both the clock and the audio schedule count from the moment
+    // its first frame lands, so the two start together however long the
+    // decoder took to re-open.
+    this.priming = !!this.videoSink;
+    this.pictureReady = this.videoSink
+      ? new Promise<void>((resolve) => {
+          const open = () => {
+            if (this.releasePicture !== open) return;
+            this.releasePicture = null;
+            if (this.generation === generation && !this.stopped) {
+              // Set here rather than in a `then`, so nothing waiting on this
+              // can resume before the clock it reads has an origin.
+              this.contextStartTime = this.clockTime();
+              this.priming = false;
+            }
+            resolve();
+          };
+          this.releasePicture = open;
+          // A file this browser cannot decode video from still plays its
+          // sound; six seconds in, the engine says why for itself.
+          setTimeout(open, PICTURE_WAIT_MS);
+        })
+      : Promise.resolve();
     void this.runVideo(generation).catch(failed);
     void this.runAudio(generation).catch(failed);
     // The decode and audio clocks run independently of React. Reporting at
@@ -886,6 +935,10 @@ export class MediabunnyPlayer {
     let pending: WrappedCanvas | null = null;
     for await (const frame of this.videoSink.canvases(start)) {
       if (this.generation !== generation || this.stopped) return;
+      // Decoding has to begin at the keyframe before the resume point, so the
+      // first frames out of it are ones already watched. Drawing them rewinds
+      // the picture a second or two before it jumps forward again.
+      if (frame.timestamp < start) continue;
       // Held until its moment, then drawn — the audio clock decides when, so
       // the two stay together rather than drifting apart.
       pending = frame;
@@ -893,7 +946,11 @@ export class MediabunnyPlayer {
         await new Promise((resolve) => requestAnimationFrame(resolve));
         if (this.generation !== generation || this.stopped) return;
       }
-      if (pending) this.draw(pending);
+      if (pending) {
+        this.draw(pending);
+        // The picture is back, so the clock and the sound may start.
+        this.releasePicture?.();
+      }
       pending = null;
     }
   }
@@ -901,6 +958,9 @@ export class MediabunnyPlayer {
   private async runAudio(generation: number) {
     if (!this.audioSink || !this.context || !this.gain) return;
     const context = this.context;
+    // The sound waits for the picture rather than the other way round.
+    await this.pictureReady;
+    if (this.generation !== generation || this.stopped) return;
     for await (const { buffer, timestamp } of this.audioSink.buffers(
       this.startedFrom,
     )) {

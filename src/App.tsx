@@ -1344,6 +1344,25 @@ export function App() {
     [profile],
   );
 
+  /**
+   * The blob keys behind each subtitle style the player can change.
+   *
+   * Kept here rather than in the player: the player asks for a caption to look
+   * a certain way, and where that is written down is this file's business.
+   * These are the same keys the settings page writes, so a change made over
+   * the picture and one made in Settings are the same change.
+   */
+  const SUBTITLE_STYLE_KEYS = {
+    subtitleFontSizeSp: ["subtitle_font_size_sp", "int"],
+    subtitleBottomOffset: ["subtitle_bottom_offset", "int"],
+    subtitleTextColor: ["subtitle_text_color", "string"],
+    subtitleBackgroundColor: ["subtitle_background_color", "string"],
+    subtitleOutlineColor: ["subtitle_outline_color", "string"],
+    subtitleOutlineEnabled: ["subtitle_outline_enabled", "boolean"],
+    subtitleOutlineWidth: ["subtitle_outline_width", "int"],
+    subtitleBold: ["subtitle_bold", "boolean"],
+  } as const satisfies Record<string, readonly [string, SyncPreferenceType]>;
+
   const updateTypedSetting = useCallback(
     (
       feature: string,
@@ -2620,6 +2639,14 @@ export function App() {
           }
           episodes={playback.meta.videos}
           watchIndex={watchIndex}
+          onSubtitleStyle={(patch) => {
+            for (const [name, value] of Object.entries(patch)) {
+              const entry =
+                SUBTITLE_STYLE_KEYS[name as keyof typeof SUBTITLE_STYLE_KEYS];
+              if (!entry || value === undefined) continue;
+              updateTypedSetting("player_settings", entry[0], entry[1], value);
+            }
+          }}
           sources={playerSources}
           streamBadgeSettings={webSettings.streamBadges}
           sourcesBusy={playerSourcesBusy}

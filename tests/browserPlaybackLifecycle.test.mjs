@@ -21,6 +21,38 @@ test('silent video has an advancing wall clock rather than waiting forever for a
   assert.equal(p.currentTime, paused);
 });
 
+test('resuming holds the clock until the picture is back', () => {
+  const p = player();
+  // Where a resume starts: the position is known, the decoder is not there
+  // yet. Re-opening it at the keyframe before this point is a second or two
+  // of work, and the sound used to run for all of it.
+  p.videoSink = {};
+  p.pausedAt = 30;
+  p.startedFrom = 30;
+  p.playing = true;
+  p.priming = true;
+  p.contextStartTime = performance.now() / 1000 - 5;
+  assert.equal(p.currentTime, 30, 'the clock must not run while priming');
+
+  // The first frame lands; the origin is taken then, so nothing was lost.
+  p.priming = false;
+  p.contextStartTime = performance.now() / 1000;
+  assert.ok(p.currentTime < 30.5, 'playback resumes from where it paused');
+});
+
+test('a resume draws from the resume point, not from the keyframe before it', () => {
+  const engine = readFileSync(
+    new URL("../src/lib/mediabunnyPlayer.ts", import.meta.url),
+    "utf8",
+  );
+  // Frames decoded on the way up to the resume point are already watched;
+  // drawing them rewinds the picture before it jumps forward again.
+  assert.match(engine, /if \(frame\.timestamp < start\) continue;/);
+  // And the sound waits for the picture rather than the other way round.
+  assert.match(engine, /await this\.pictureReady;/);
+  assert.match(engine, /this\.releasePicture\?\.\(\);/);
+});
+
 test('decoded playback clock follows the selected speed', () => {
   const p = player();
   p.setPlaybackRate(2);
@@ -164,6 +196,12 @@ test('one cog holds the settings, and none of them explain themselves', () => {
   assert.doesNotMatch(component, /Turn off to limit HDR brightness/);
   assert.doesNotMatch(component, /Dolby Vision-only source/);
   assert.doesNotMatch(component, /Open externally/);
+
+  // Captions can be restyled from where you can see the effect, and the same
+  // stored values Settings edits are the ones it writes.
+  assert.match(component, /settingsPage === "captionStyle"/);
+  assert.match(component, /onSubtitleStyle\?\.\(\{ subtitleTextColor: option\.value \}\)/);
+  assert.match(component, /className="caption-style-preview"/);
 
   // Volume rides with the transport controls on the left.
   const left = /className="player-control-group">[\s\S]*?<\/div>\s*\n\s*<div className="player-control-group player-control-right">/.exec(component);
