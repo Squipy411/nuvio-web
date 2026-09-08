@@ -172,6 +172,8 @@ import { useProgressiveList } from "./lib/useProgressiveList";
 import { useScrollLock } from "./lib/useScrollLock";
 import { ContinueLoadingOverlay } from "./components/ContinueLoadingOverlay";
 import { useSwipeBack } from "./lib/useSwipeBack";
+import { installTooltips } from "./lib/tooltip";
+import { Select } from "./components/Select";
 import { providerCredential } from "./lib/providerCredentials";
 import type { MetadataEnrichmentConfig } from "./lib/metadataEnrichment";
 import {
@@ -1485,6 +1487,10 @@ export function App() {
     },
     [profile],
   );
+
+  // One listener for the whole app, reading the `title` attributes already
+  // there: nothing has to opt in, and anything added later is covered.
+  useEffect(() => installTooltips(), []);
 
   useLayoutEffect(() => {
     // Keep the boot cache through auth/profile loading and failed requests.
@@ -4839,7 +4845,7 @@ function SettingsPage({
             <strong>{t("settings.row.tmdbLanguage")}</strong>
             <small>Language requested for localized metadata.</small>
           </span>
-          <select
+          <Select
             value={settings.integrations.tmdbLanguage}
             disabled={!settingsReady || !tmdbKey}
             onChange={(event) =>
@@ -4854,7 +4860,7 @@ function SettingsPage({
             {LANGUAGE_OPTIONS.map(([value, label]) => (
               <option key={value} value={value}>{label}</option>
             ))}
-          </select>
+          </Select>
         </label>
         {[
           ["Artwork and logos", "tmdb_use_artwork", settings.integrations.tmdbUseArtwork],
@@ -5013,7 +5019,7 @@ function SettingsPage({
             <strong>{t("settings.row.desktopNavigation")}</strong>
             <small>Choose a side rail or a compact navigation row.</small>
           </span>
-          <select
+          <Select
             value={settings.desktopNavigationLayout}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5027,7 +5033,7 @@ function SettingsPage({
           >
             <option value="Sidebar">Sidebar</option>
             <option value="TopBar">Top bar</option>
-          </select>
+          </Select>
         </label>
         {/* One size rather than a width and a height. Two free numbers let a
             card be any shape at all, and a poster that is not 2:3 crops its
@@ -5105,7 +5111,7 @@ function SettingsPage({
             <strong>{t("settings.language.title")}</strong>
             <small>{t("settings.language.description")}</small>
           </span>
-          <select
+          <Select
             value={language}
             onChange={(event) => onLanguage(event.target.value)}
           >
@@ -5115,7 +5121,7 @@ function SettingsPage({
                 {locale.label}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
         <SettingToggle
           title="Show hero section"
@@ -5153,7 +5159,7 @@ function SettingsPage({
             <strong>{t("settings.row.cardStyle")}</strong>
             <small>Use Nuvio's card, wide, or poster layout.</small>
           </span>
-          <select
+          <Select
             value={settings.continueWatching.style}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5163,7 +5169,7 @@ function SettingsPage({
             <option value="Card">Card</option>
             <option value="Wide">Wide</option>
             <option value="Poster">Poster</option>
-          </select>
+          </Select>
         </label>
         <label className="setting-select-row">
           <span>
@@ -5173,7 +5179,7 @@ function SettingsPage({
               own row.
             </small>
           </span>
-          <select
+          <Select
             value={settings.continueWatching.sortMode}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5183,7 +5189,7 @@ function SettingsPage({
             <option value="DEFAULT">Default</option>
             <option value="STREAMING_STYLE">Streaming style</option>
             <option value="SPLIT_UPCOMING">Split upcoming</option>
-          </select>
+          </Select>
         </label>
         <SettingToggle
           title={t("toggle.furthestEpisode.title")}
@@ -5243,7 +5249,7 @@ function SettingsPage({
             <strong>{t("settings.row.background")}</strong>
             <small>Choose how artwork continues behind the detail page.</small>
           </span>
-          <select
+          <Select
             value={settings.metaScreen.backgroundMode}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5253,14 +5259,14 @@ function SettingsPage({
             <option value="normal">Normal</option>
             <option value="cinematic">Cinematic</option>
             <option value="dominant_color">Dominant color</option>
-          </select>
+          </Select>
         </label>
         <label className="setting-select-row">
           <span>
             <strong>{t("settings.row.episodeCards")}</strong>
             <small>List is denser; horizontal keeps larger artwork and summaries.</small>
           </span>
-          <select
+          <Select
             value={settings.metaScreen.episodeCardStyle}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5269,7 +5275,7 @@ function SettingsPage({
           >
             <option value="horizontal">Horizontal</option>
             <option value="list">List</option>
-          </select>
+          </Select>
         </label>
         <SettingToggle
           title={t("toggle.blurUnwatched.title")}
@@ -5346,7 +5352,7 @@ function SettingsPage({
                     : "mpv opens through the mpv-handler helper, which has to be installed separately. Otherwise copy the link for your player."}
             </small>
           </span>
-          <select
+          <Select
             value={externalPlayer}
             onChange={(event) =>
               onExternalPlayer(event.target.value as ExternalPlayerMode)
@@ -5363,7 +5369,7 @@ function SettingsPage({
                 {option.reportsBack ? " ✓ reports back" : ""}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
         {/* iOS only, because it is the only platform that cannot be reopened
             by a link. The Shortcut is what carries you back, so it is offered
@@ -5422,7 +5428,7 @@ function SettingsPage({
               never hide the sources that did arrive.
             </small>
           </span>
-          <select
+          <Select
             value={defaultSourceAddon}
             onChange={(event) => onDefaultSourceAddon(event.target.value)}
           >
@@ -5432,7 +5438,7 @@ function SettingsPage({
                 {name}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
         <SettingToggle
           title={t("toggle.loadingOverlay.title")}
@@ -5467,7 +5473,7 @@ function SettingsPage({
             <strong>{t("settings.row.resizeMode")}</strong>
             <small>Fit preserves the whole frame; Zoom/Fill crop it.</small>
           </span>
-          <select
+          <Select
             value={settings.player.resizeMode}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5483,7 +5489,7 @@ function SettingsPage({
             <option value="Zoom">Zoom</option>
             <option value="Fill">Fill</option>
             <option value="Stretch">Stretch</option>
-          </select>
+          </Select>
         </label>
         {/* Only where a shell can actually drive it. The capability is absent
             in a browser, on a Mac, and on a Windows machine with no NVIDIA
@@ -5517,7 +5523,7 @@ function SettingsPage({
             <strong>{t("settings.row.automaticSource")}</strong>
             <small>Uses Nuvio's MANUAL, FIRST_STREAM, or REGEX_MATCH value.</small>
           </span>
-          <select
+          <Select
             value={settings.player.autoPlayMode}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5532,7 +5538,7 @@ function SettingsPage({
             <option value="MANUAL">Choose manually</option>
             <option value="FIRST_STREAM">First stream</option>
             <option value="REGEX_MATCH">Regex match</option>
-          </select>
+          </Select>
         </label>
         {settings.player.autoPlayMode === "REGEX_MATCH" && (
           <label className="setting-text-row">
@@ -5642,7 +5648,7 @@ function SettingsPage({
             <strong>{t("settings.row.preferredAudio")}</strong>
             <small>Applied to browser and HLS audio tracks when available.</small>
           </span>
-          <select
+          <Select
             value={settings.player.preferredAudioLanguage}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5659,14 +5665,14 @@ function SettingsPage({
             {LANGUAGE_OPTIONS.map(([value, label]) => (
               <option key={value} value={value}>{label}</option>
             ))}
-          </select>
+          </Select>
         </label>
         <label className="setting-select-row">
           <span>
             <strong>{t("settings.row.fallbackAudio")}</strong>
             <small>{t("language.fallbackHint")}</small>
           </span>
-          <select
+          <Select
             value={settings.player.secondaryPreferredAudioLanguage}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5683,14 +5689,14 @@ function SettingsPage({
             {LANGUAGE_OPTIONS.map(([value, label]) => (
               <option key={value} value={value}>{label}</option>
             ))}
-          </select>
+          </Select>
         </label>
         <label className="setting-select-row">
           <span>
             <strong>{t("settings.row.preferredSubtitles")}</strong>
             <small>Selects matching embedded browser tracks when present.</small>
           </span>
-          <select
+          <Select
             value={settings.player.preferredSubtitleLanguage}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5708,14 +5714,14 @@ function SettingsPage({
             {LANGUAGE_OPTIONS.map(([value, label]) => (
               <option key={value} value={value}>{label}</option>
             ))}
-          </select>
+          </Select>
         </label>
         <label className="setting-select-row">
           <span>
             <strong>{t("settings.row.fallbackSubtitles")}</strong>
             <small>{t("language.fallbackHint")}</small>
           </span>
-          <select
+          <Select
             value={settings.player.secondaryPreferredSubtitleLanguage}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5732,7 +5738,7 @@ function SettingsPage({
             {LANGUAGE_OPTIONS.map(([value, label]) => (
               <option key={value} value={value}>{label}</option>
             ))}
-          </select>
+          </Select>
         </label>
         <SettingToggle
           title={t("toggle.useForcedSubtitles.title")}
@@ -5880,7 +5886,7 @@ function SettingsPage({
               {settings.streamBadges.filters.length === 1 ? "" : "s"} loaded.
             </small>
           </span>
-          <select
+          <Select
             value={settings.streamBadges.placement}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5894,7 +5900,7 @@ function SettingsPage({
           >
             <option value="TOP">Above details</option>
             <option value="BOTTOM">Below details</option>
-          </select>
+          </Select>
         </label>
       </div>
       {/* Only where there is a folder to name. A browser downloads through the

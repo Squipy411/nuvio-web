@@ -1,4 +1,5 @@
 import { selectAutoStream } from "../lib/playbackPolicy";
+import { Select } from "./Select";
 import { bingeGroupFor } from "../lib/bingeCache";
 import { matchBadges } from "../lib/badgeMatcher";
 import {
@@ -1331,7 +1332,7 @@ export function Details({
             <div className="episode-header-controls">
               <label className="season-select-wrap">
                 <span>SEASON</span>
-                <select
+                <Select
                   value={season ?? ""}
                   onChange={(event) => {
                     setSeason(Number(event.target.value));
@@ -1343,7 +1344,7 @@ export function Details({
                       {value === 0 ? "Specials" : `Season ${value}`}
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
               <button
                 type="button"
@@ -1503,7 +1504,7 @@ export function Details({
             <h2>Trailers</h2>
             {trailerCategories.length > 0 && (
               <label className="detail-trailer-category">
-                <select
+                <Select
                   aria-label="Video category"
                   value={effectiveTrailerCategory}
                   onChange={(event) =>
@@ -1515,7 +1516,7 @@ export function Details({
                       {category} ({rows.length})
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
             )}
           </div>
@@ -1649,7 +1650,7 @@ export function Details({
                     moment you are looking at them. */}
                 {!platform.player && <label className="source-player">
                   <span>Play in</span>
-                  <select
+                  <Select
                     value={sheetPlayer}
                     onChange={(event) =>
                       onDefaultPlayer(event.target.value as ExternalPlayerMode)
@@ -1664,12 +1665,12 @@ export function Details({
                         {option.reportsBack ? " ✓" : ""}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </label>}
                 {sourceAddons.length > 1 && (
                   <label className="source-player">
                     <span>{t("sources.addon")}</span>
-                    <select
+                    <Select
                       value={activeAddon}
                       onChange={(event) => setSourceAddon(event.target.value)}
                     >
@@ -1679,7 +1680,7 @@ export function Details({
                           {name}
                         </option>
                       ))}
-                    </select>
+                    </Select>
                   </label>
                 )}
               </div>
@@ -2167,7 +2168,7 @@ function EpisodeRoulette({
         <div className="library-roulette-setup episode-roulette-setup">
           <label className="episode-roulette-scope">
             <span>Season</span>
-            <select
+            <Select
               value={scope}
               disabled={spinning}
               onChange={(event) =>
@@ -2179,7 +2180,7 @@ function EpisodeRoulette({
                 <option key={value} value={value}>Season {value}</option>
               ))}
               {includeSpecials && <option value={0}>Specials</option>}
-            </select>
+            </Select>
           </label>
           <div className="library-roulette-settings-anchor" ref={settingsAnchor}>
             <button

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Select } from "./Select";
 import { Dices } from "lucide-react";
 import { TitleRoulette } from "../App";
 import {
@@ -176,7 +177,7 @@ export function Discover({
     <>
             <label>
               <span>Type</span>
-              <select
+              <Select
                 value={activeType ?? ""}
                 onChange={(event) => {
                   setType(event.target.value);
@@ -189,11 +190,11 @@ export function Discover({
                     {typeLabel(option)}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
             <label>
               <span>Catalog</span>
-              <select
+              <Select
                 value={catalog?.key ?? ""}
                 onChange={(event) => {
                   setCatalogKey(event.target.value);
@@ -205,11 +206,11 @@ export function Discover({
                     {option.catalogName}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
             <label>
               <span>Genre</span>
-              <select
+              <Select
                 value={effectiveGenre ?? ALL_GENRES}
                 disabled={!catalog || catalog.genreOptions.length === 0}
                 onChange={(event) => setGenre(event.target.value)}
@@ -225,7 +226,7 @@ export function Discover({
                 {catalog?.genreOptions.length === 0 && (
                   <option value={ALL_GENRES}>Not supported</option>
                 )}
-              </select>
+              </Select>
             </label>
     </>
   );

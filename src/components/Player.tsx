@@ -1,4 +1,5 @@
 import type Hls from "hls.js";
+import { Select } from "./Select";
 import {
   ClosedCaptionIcon,
   HdIcon,
@@ -3156,7 +3157,7 @@ export function Player({
             </header>
             <label className="season-select-wrap">
               <span>SEASON</span>
-              <select
+              <Select
                 value={season ?? ""}
                 onChange={(event) => setSeason(Number(event.target.value))}
               >
@@ -3165,7 +3166,7 @@ export function Player({
                     {value === 0 ? "Specials" : `Season ${value}`}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
             <div className="episode-list-heading">
               <strong>
