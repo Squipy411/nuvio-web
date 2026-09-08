@@ -106,6 +106,31 @@ test("the platform list is suppressed, and only where there is a mouse", () => {
   assert.match(source, /<select\n\s*\{\.\.\.rest\}/);
 });
 
+test("the dropdown and the tooltip outrank every overlay in the app", () => {
+  // Both are portalled to the document and positioned in the viewport, so
+  // nothing contains them and only the stacking order decides. A field can be
+  // opened from inside the roulette dialog (1000) or the plugin dialog
+  // (1005); at 321 the list opened behind the backdrop and looked broken.
+  const css = readFileSync(
+    fileURLToPath(new URL("../src/styles.css", import.meta.url)),
+    "utf8",
+  );
+  const layer = (selector) => {
+    const rule = new RegExp(`\\${selector} \\{[^}]*z-index: (\\d+)`, "s").exec(css);
+    assert.ok(rule, `${selector} has no z-index`);
+    return Number(rule[1]);
+  };
+  const menu = layer(".select-menu");
+  const tooltip = layer(".app-tooltip");
+  const others = [...css.matchAll(/z-index: (\d+)/g)]
+    .map((match) => Number(match[1]))
+    .filter((value) => value !== menu && value !== tooltip);
+
+  assert.ok(menu > Math.max(...others), `.select-menu (${menu}) must top the app`);
+  // A tooltip can be drawn over an open list, and takes no pointer events.
+  assert.ok(tooltip > menu, ".app-tooltip must sit above .select-menu");
+});
+
 test("nothing renders a native select any more", () => {
   for (const file of [
     "../src/App.tsx",

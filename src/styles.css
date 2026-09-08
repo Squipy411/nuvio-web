@@ -3703,7 +3703,11 @@ html.native-player-active.native-player-covered .player-view.native-player {
    opens a list that is not clipped by either. */
 .select-menu {
   position: fixed;
-  z-index: 321;
+  /* Above every overlay a field can be opened from, the roulette dialog and
+     the plugin dialog included — both of which sit in the thousands. These
+     two are portalled to the document and are transient, so nothing the app
+     draws should ever come out on top of them. */
+  z-index: 3000;
   max-height: 302px;
   padding: 5px;
   overflow-y: auto;
@@ -3779,7 +3783,9 @@ html.native-player-active.native-player-covered .player-view.native-player {
    fixed and outside every stacking context the app builds. */
 .app-tooltip {
   position: fixed;
-  z-index: 300;
+  /* Above the dropdown, which is itself above everything else. It cannot
+     block anything: it takes no pointer events. */
+  z-index: 3001;
   max-width: min(280px, calc(100vw - 16px));
   padding: 6px 10px;
   border: 1px solid var(--episodes-field-line);
