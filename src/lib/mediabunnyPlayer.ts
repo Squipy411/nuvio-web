@@ -67,7 +67,7 @@ const READ_TIMEOUT_MS = 90_000;
  * Long enough to cover re-opening a decoder at a keyframe; short enough that a
  * file whose video never decodes is not silent as well as blank.
  */
-const PICTURE_WAIT_MS = 2_000;
+const PICTURE_WAIT_MS = 6_000;
 
 /** Registered once per page, and only when something actually needs it. */
 let dolbyDecoder: Promise<void> | null = null;
@@ -258,6 +258,18 @@ export class MediabunnyPlayer {
   private stopped = false;
   private playing = false;
   private generation = 0;
+  /**
+   * The video loop's own lifetime, which a pause does not end.
+   *
+   * Pausing used to invalidate everything, so an unpause re-opened the decoder
+   * at the keyframe before the resume point — a second or two of work to
+   * arrive back at the frame already on the canvas. The loop parks instead:
+   * it holds the next frame and waits on a clock that has stopped, which costs
+   * nothing and resumes on the following frame. Only a move — a seek, a track
+   * change, a stop — actually invalidates it.
+   */
+  private videoGeneration = 0;
+  private videoRunning = false;
   private queuedNodes = new Set<AudioBufferSourceNode>();
   private frameHandle: number | null = null;
 
@@ -631,10 +643,23 @@ export class MediabunnyPlayer {
     this.startedFrom = this.pausedAt;
     this.contextStartTime = this.clockTime();
     this.run(++this.generation);
-    // Said even when the video is fine. Without it the file simply played with
-    // no sound and no explanation, which reads as a broken app rather than as
-    // audio this engine cannot open — and on Apple there is another player
-    // here that can.
+    // Buffering while the decoder is being opened, which is a wait with a
+    // spinner rather than a picture that has stopped for no stated reason.
+    // Where there is nothing to open — an unpause — this is already false and
+    // playback simply carries on.
+    if (this.priming) this.report("buffering", "");
+    else this.reportReady();
+  }
+
+  /**
+   * Playing, with whatever has to be said about it.
+   *
+   * Silence is said even when the video is fine. Without it the file simply
+   * played with no sound and no explanation, which reads as a broken app
+   * rather than as audio this engine cannot open — and on Apple there is
+   * another player here that can.
+   */
+  private reportReady() {
     this.report(
       "ready",
       this.silentAudio
@@ -662,6 +687,10 @@ export class MediabunnyPlayer {
     const wasPlaying = this.playing;
     this.playing = false;
     const generation = ++this.generation;
+    // Unlike a pause, this is a move: the loop's iterator is somewhere else
+    // entirely and has to be re-opened at the destination.
+    this.videoGeneration += 1;
+    this.videoRunning = false;
     this.silence();
     this.pausedAt = target;
     if (!keepStatus) this.report("buffering", "");
@@ -791,6 +820,8 @@ export class MediabunnyPlayer {
     this.priming = false;
     this.releasePicture = null;
     this.generation += 1;
+    this.videoGeneration += 1;
+    this.videoRunning = false;
     this.silence();
     if (this.frameHandle !== null) cancelAnimationFrame(this.frameHandle);
     void this.context?.close().catch(() => undefined);
@@ -880,30 +911,55 @@ export class MediabunnyPlayer {
       this.report("error", error instanceof Error ? error.message : "Decoding failed");
       this.stop();
     };
-    // Video leads. Both the clock and the audio schedule count from the moment
-    // its first frame lands, so the two start together however long the
-    // decoder took to re-open.
-    this.priming = !!this.videoSink;
-    this.pictureReady = this.videoSink
-      ? new Promise<void>((resolve) => {
-          const open = () => {
-            if (this.releasePicture !== open) return;
-            this.releasePicture = null;
-            if (this.generation === generation && !this.stopped) {
-              // Set here rather than in a `then`, so nothing waiting on this
-              // can resume before the clock it reads has an origin.
-              this.contextStartTime = this.clockTime();
-              this.priming = false;
-            }
-            resolve();
-          };
-          this.releasePicture = open;
-          // A file this browser cannot decode video from still plays its
-          // sound; six seconds in, the engine says why for itself.
-          setTimeout(open, PICTURE_WAIT_MS);
+    // Video leads, but only when it has to be opened. Both the clock and the
+    // audio schedule then count from the moment its first frame lands, so the
+    // two start together however long that took. An unpause has a decoder
+    // already parked on the next frame, so there is nothing to wait for and
+    // waiting would be a stall of this engine's own making.
+    const reopening = !!this.videoSink && !this.videoRunning;
+    this.priming = reopening;
+    if (reopening) {
+      this.pictureReady = new Promise<void>((resolve) => {
+        const open = () => {
+          if (this.releasePicture !== open) return;
+          this.releasePicture = null;
+          if (this.generation === generation && !this.stopped) {
+            // Set here rather than in a `then`, so nothing waiting on this can
+            // resume before the clock it reads has an origin.
+            this.contextStartTime = this.clockTime();
+            this.priming = false;
+            if (this.playing) this.reportReady();
+          }
+          resolve();
+        };
+        this.releasePicture = open;
+        // A file this browser cannot decode video from still plays its sound.
+        // Long enough to cover opening a decoder, and matched to the window
+        // after which the engine says for itself that nothing has been drawn.
+        setTimeout(open, PICTURE_WAIT_MS);
+      });
+      const videoGeneration = this.videoGeneration;
+      this.videoRunning = true;
+      void this.runVideo(videoGeneration)
+        .catch((error: unknown) => {
+          if (this.videoGeneration !== videoGeneration || this.stopped) return;
+          // Whatever was waiting on the first frame must not wait out the
+          // whole budget for one that is never coming.
+          this.releasePicture?.();
+          // A decoder parked through a long pause can have its read time out.
+          // Paused, that is recoverable: the loop closes and the next play
+          // opens a new one at the resume point. Only a failure during
+          // playback is a failure of playback.
+          if (this.playing) failed(error);
         })
-      : Promise.resolve();
-    void this.runVideo(generation).catch(failed);
+        .finally(() => {
+          if (this.videoGeneration === videoGeneration) this.videoRunning = false;
+        });
+    } else {
+      // Nothing to wait for, so the clock starts where it was asked to.
+      this.contextStartTime = this.clockTime();
+      this.pictureReady = Promise.resolve();
+    }
     void this.runAudio(generation).catch(failed);
     // The decode and audio clocks run independently of React. Reporting at
     // display refresh rate only made the entire player tree render 60-120
@@ -934,7 +990,7 @@ export class MediabunnyPlayer {
     const start = this.startedFrom;
     let pending: WrappedCanvas | null = null;
     for await (const frame of this.videoSink.canvases(start)) {
-      if (this.generation !== generation || this.stopped) return;
+      if (this.videoGeneration !== generation || this.stopped) return;
       // Decoding has to begin at the keyframe before the resume point, so the
       // first frames out of it are ones already watched. Drawing them rewinds
       // the picture a second or two before it jumps forward again.
@@ -942,9 +998,11 @@ export class MediabunnyPlayer {
       // Held until its moment, then drawn — the audio clock decides when, so
       // the two stay together rather than drifting apart.
       pending = frame;
+      // Paused, the clock has stopped and this waits here holding the frame it
+      // was about to draw — which is exactly where an unpause needs it.
       while (pending && pending.timestamp > this.currentTime) {
         await new Promise((resolve) => requestAnimationFrame(resolve));
-        if (this.generation !== generation || this.stopped) return;
+        if (this.videoGeneration !== generation || this.stopped) return;
       }
       if (pending) {
         this.draw(pending);

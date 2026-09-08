@@ -40,6 +40,36 @@ test('resuming holds the clock until the picture is back', () => {
   assert.ok(p.currentTime < 30.5, 'playback resumes from where it paused');
 });
 
+test('pausing parks the video decoder rather than closing it', () => {
+  const p = player();
+  p.videoSink = {};
+  p.videoRunning = true;
+  p.playing = true;
+  p.startedFrom = 0;
+  p.contextStartTime = performance.now() / 1000 - 10;
+  const lifetime = p.videoGeneration;
+
+  p.pause();
+
+  // The run is over — audio and the clock stop — but the video loop's own
+  // lifetime is untouched, so it is still parked holding the next frame.
+  // Closing it meant an unpause re-opened the decoder at the keyframe before
+  // the resume point to arrive back at the frame already on the canvas.
+  assert.equal(p.videoGeneration, lifetime);
+  assert.equal(p.videoRunning, true);
+});
+
+test('a seek does close it, because the decoder has to move', async () => {
+  const p = player();
+  p.videoRunning = true;
+  const lifetime = p.videoGeneration;
+
+  await p.seek(120);
+
+  assert.ok(p.videoGeneration > lifetime, 'a move invalidates the video loop');
+  assert.equal(p.videoRunning, false, 'and the next play re-opens it');
+});
+
 test('a resume draws from the resume point, not from the keyframe before it', () => {
   const engine = readFileSync(
     new URL("../src/lib/mediabunnyPlayer.ts", import.meta.url),
@@ -51,6 +81,13 @@ test('a resume draws from the resume point, not from the keyframe before it', ()
   // And the sound waits for the picture rather than the other way round.
   assert.match(engine, /await this\.pictureReady;/);
   assert.match(engine, /this\.releasePicture\?\.\(\);/);
+  // Only where there is a decoder to open. An unpause has one parked on the
+  // next frame, and waiting there would be a stall of the engine's own making.
+  assert.match(engine, /const reopening = !!this\.videoSink && !this\.videoRunning;/);
+  // The wait is a spinner rather than a picture that has stopped for no
+  // stated reason, and it ends by saying so.
+  assert.match(engine, /if \(this\.priming\) this\.report\("buffering", ""\);/);
+  assert.match(engine, /if \(this\.playing\) this\.reportReady\(\);/);
 });
 
 test('decoded playback clock follows the selected speed', () => {
