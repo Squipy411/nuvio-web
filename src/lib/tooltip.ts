@@ -101,10 +101,24 @@ export function installTooltips(): () => void {
     held = "";
   };
 
-  const hide = () => {
+  /**
+   * Takes ours away but keeps the attribute held.
+   *
+   * A press dismisses the tooltip while the pointer is still on the control.
+   * Giving the `title` back there hands the browser a hovered element with a
+   * title on it, and it draws its own — so clicking a button was the one way
+   * to see the tooltip this file exists to replace. The attribute goes back
+   * when the pointer actually leaves, which is `release`.
+   */
+  const conceal = () => {
     window.clearTimeout(openTimer);
     openTimer = undefined;
     bubble.hidden = true;
+  };
+
+  /** Hidden, and the element given back what was taken from it. */
+  const release = () => {
+    conceal();
     restore();
   };
 
@@ -128,7 +142,7 @@ export function installTooltips(): () => void {
     if (!pointerHovers()) return;
     const text = element.getAttribute("title")?.trim();
     if (!text) return;
-    hide();
+    release();
     host = element;
     held = text;
     // Off the element for as long as ours is up, or both are drawn.
@@ -168,15 +182,17 @@ export function installTooltips(): () => void {
     // Moving between an element and its own children is not leaving it.
     const related = (event as PointerEvent).relatedTarget;
     if (related instanceof Node && host.contains(related)) return;
-    hide();
+    release();
   };
 
   // A press means the thing was understood; the explanation can go. Scrolling
   // moves the target out from under a bubble that is positioned in the
-  // viewport, so that dismisses it too.
-  const onDismiss = () => hide();
+  // viewport, so that dismisses it too. Both conceal rather than release: the
+  // pointer may still be resting where it was.
+  const onDismiss = () => conceal();
+  const onLeave = () => release();
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key === "Escape") hide();
+    if (event.key === "Escape") conceal();
   };
 
   document.body.appendChild(bubble);
@@ -185,22 +201,22 @@ export function installTooltips(): () => void {
   document.addEventListener("pointerout", onOut, true);
   document.addEventListener("pointerdown", onDismiss, true);
   document.addEventListener("focusin", onOver, true);
-  document.addEventListener("focusout", onDismiss, true);
+  document.addEventListener("focusout", onLeave, true);
   document.addEventListener("keydown", onKeyDown, true);
   window.addEventListener("scroll", onDismiss, true);
-  window.addEventListener("blur", onDismiss);
+  window.addEventListener("blur", onLeave);
 
   return () => {
-    hide();
+    release();
     document.removeEventListener("pointerover", onOver, true);
     document.removeEventListener("pointermove", onMove, true);
     document.removeEventListener("pointerout", onOut, true);
     document.removeEventListener("pointerdown", onDismiss, true);
     document.removeEventListener("focusin", onOver, true);
-    document.removeEventListener("focusout", onDismiss, true);
+    document.removeEventListener("focusout", onLeave, true);
     document.removeEventListener("keydown", onKeyDown, true);
     window.removeEventListener("scroll", onDismiss, true);
-    window.removeEventListener("blur", onDismiss);
+    window.removeEventListener("blur", onLeave);
     bubble.remove();
   };
 }

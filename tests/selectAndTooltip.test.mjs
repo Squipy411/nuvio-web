@@ -110,6 +110,22 @@ test("a tooltip flips rather than sitting under the pointer that summoned it", (
   assert.ok(corner.left >= 8 && corner.top >= 8);
 });
 
+test("a press hides the tooltip without handing the title back", () => {
+  const source = readFileSync(
+    fileURLToPath(new URL("../src/lib/tooltip.ts", import.meta.url)),
+    "utf8",
+  );
+  // Restoring `title` while the pointer is still on the control hands the
+  // browser a hovered element with a title on it, and it draws its own — so
+  // clicking a button was the one way to see the tooltip this file replaces.
+  // A press conceals; only the pointer leaving releases.
+  assert.match(source, /const onDismiss = \(\) => conceal\(\);/);
+  assert.match(source, /const onLeave = \(\) => release\(\);/);
+  assert.match(source, /const release = \(\) => \{\s*\n\s*conceal\(\);\s*\n\s*restore\(\);/);
+  // `hide` is gone: leaving both names in place is how the two get confused.
+  assert.doesNotMatch(source, /\bhide\(\)/);
+});
+
 test("the platform list is suppressed, and only where there is a mouse", () => {
   const source = readFileSync(
     fileURLToPath(new URL("../src/components/Select.tsx", import.meta.url)),
