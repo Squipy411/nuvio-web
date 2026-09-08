@@ -34,6 +34,30 @@ test("options are read through the conditionals they are written with", () => {
   assert.equal(options[1].disabled, false);
 });
 
+test("a label built from several children is joined as the DOM joins it", () => {
+  // `<option>Season {value}</option>` is two children, and `String()` on that
+  // array is the array's own join: "Season ,1". The native list read correctly
+  // the whole time, so only the drawn one grew commas.
+  const options = readOptions([
+    createElement("option", { key: 1, value: 1 }, "Season ", 1),
+    createElement("option", { key: "t", value: "trailers" }, "Trailers", " (", 3, ")"),
+    // Nested elements contribute their own text, and nothing renderless
+    // contributes "[object Object]" or "false".
+    createElement(
+      "option",
+      { key: "n", value: "n" },
+      createElement("span", null, "Deep"),
+      false,
+      null,
+      " text",
+    ),
+  ]);
+  assert.deepEqual(
+    options.map((entry) => entry.label),
+    ["Season 1", "Trailers (3)", "Deep text"],
+  );
+});
+
 test("an option with no value of its own is named by its text", () => {
   const options = readOptions([
     createElement("option", { key: "a" }, "Not supported"),

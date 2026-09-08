@@ -11,6 +11,25 @@ import { Children, isValidElement, type ReactNode } from "react";
 export type SelectOption = { value: string; label: string; disabled: boolean };
 
 /**
+ * The text an `<option>` renders as.
+ *
+ * `<option>Season {value}</option>` is two children, not one string, and
+ * `String(["Season ", 1])` is `"Season ,1"` — the array's own join. The DOM
+ * concatenates its text nodes, so the native list read correctly while this
+ * one grew commas. Anything that is not text contributes nothing rather than
+ * `[object Object]`.
+ */
+function optionText(node: ReactNode): string {
+  if (node === null || node === undefined || typeof node === "boolean") return "";
+  if (typeof node === "string") return node;
+  if (typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(optionText).join("");
+  if (isValidElement(node))
+    return optionText((node.props as { children?: ReactNode }).children);
+  return "";
+}
+
+/**
  * The `<option>` children, as a list the menu can draw.
  *
  * `toArray` flattens the conditionals and maps these are written with; an
@@ -26,10 +45,7 @@ export function readOptions(children: ReactNode): SelectOption[] {
       children?: ReactNode;
       disabled?: boolean;
     };
-    const label =
-      typeof props.children === "string"
-        ? props.children
-        : String(props.children ?? "");
+    const label = optionText(props.children);
     return [
       {
         value: props.value === undefined ? label : String(props.value),
