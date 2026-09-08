@@ -769,6 +769,39 @@ export function Player({
       ),
     });
 
+  /**
+   * Hands the caption style to a shell that draws its own subtitles.
+   *
+   * A browser needs nothing here — the cue stylesheet above is the whole
+   * mechanism, and it re-renders with these values. mpv has to be told, and
+   * told again for a change made on the settings page mid-playback, which is
+   * why this watches the settings rather than the panel.
+   */
+  useEffect(() => {
+    if (!nativePlayer?.setSubtitleStyle) return;
+    void nativePlayer
+      .setSubtitleStyle({
+        fontSize: clamp(settings.subtitleFontSizeSp, CAPTION_SIZE_MIN, CAPTION_SIZE_MAX),
+        bold: settings.subtitleBold,
+        textColor: settings.subtitleTextColor,
+        backgroundColor: settings.subtitleBackgroundColor,
+        outlineEnabled: settings.subtitleOutlineEnabled,
+        outlineColor: settings.subtitleOutlineColor,
+        outlineWidth: clamp(settings.subtitleOutlineWidth, 0, 10),
+        bottomOffset: clamp(settings.subtitleBottomOffset, 0, CAPTION_OFFSET_MAX),
+      })
+      .catch(() => undefined);
+  }, [
+    settings.subtitleFontSizeSp,
+    settings.subtitleBold,
+    settings.subtitleTextColor,
+    settings.subtitleBackgroundColor,
+    settings.subtitleOutlineEnabled,
+    settings.subtitleOutlineColor,
+    settings.subtitleOutlineWidth,
+    settings.subtitleBottomOffset,
+  ]);
+
   const showControls = useCallback(() => {
     setControlsVisible(true);
     window.clearTimeout(hideTimer.current);
