@@ -177,6 +177,8 @@ export type SubtitleStyle = {
 export type PlayerApi = {
   open(source: PlayerSource): Promise<void>;
   state(): Promise<PlayerState>;
+  /** Native seek preview. Absent in browser-only players. */
+  thumbnail?(positionMs: number): Promise<string | undefined>;
   togglePause(): Promise<void>;
   seek(positionMs: number): Promise<void>;
   seekRelative(offsetMs: number): Promise<void>;

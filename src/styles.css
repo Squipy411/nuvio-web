@@ -3269,6 +3269,41 @@ html.native-player-active.native-player-covered .player-view.native-player {
 .player-timeline span:last-child {
   text-align: right;
 }
+.player-seek-control {
+  position: relative;
+  min-width: 0;
+}
+.player-seek-control > input {
+  width: 100%;
+}
+.player-seek-thumbnail {
+  position: absolute;
+  z-index: 2;
+  left: clamp(80px, var(--thumbnail-left), calc(100% - 80px));
+  bottom: 28px;
+  width: 160px;
+  overflow: hidden;
+  border: 1px solid #ffffff30;
+  border-radius: 10px;
+  background: #050607;
+  box-shadow: 0 10px 30px #000c;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+.player-seek-thumbnail img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+}
+.player-seek-thumbnail span {
+  display: block;
+  padding: 4px 7px 5px;
+  color: #fff;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center !important;
+}
 .player-view input[type="range"] {
   appearance: none;
   height: 18px;

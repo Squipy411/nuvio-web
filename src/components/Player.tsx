@@ -432,6 +432,13 @@ export function Player({
   const [duration, setDuration] = useState(0);
   const [seekPreview, setSeekPreview] = useState<number | null>(null);
   const seekPreviewRef = useRef<number | null>(null);
+  const [seekThumbnail, setSeekThumbnail] = useState<{
+    image: string;
+    time: number;
+    left: number;
+  } | null>(null);
+  const thumbnailRequestRef = useRef(0);
+  const thumbnailBucketRef = useRef(-1);
   // libmpv accepts a seek on its command channel before its sampled position
   // catches up.  Keep the requested position authoritative during that short
   // window so polling cannot make the timeline jump target -> old -> target.
@@ -616,6 +623,11 @@ export function Player({
     setNotice("");
   }, [url]);
   const externalUrl = stream.externalUrl || url;
+  useEffect(() => {
+    thumbnailRequestRef.current += 1;
+    thumbnailBucketRef.current = -1;
+    setSeekThumbnail(null);
+  }, [url]);
   const navigableExternalUrl = useMemo(
     () => safeHttpUrl(externalUrl),
     [externalUrl],
@@ -2303,6 +2315,35 @@ export function Player({
 
   const seekLimit = duration || 0;
   const displayedTime = seekPreview ?? currentTime;
+  const previewSeekThumbnail = (event: {
+    currentTarget: HTMLDivElement;
+    clientX: number;
+  }) => {
+    if (!nativePlayer?.thumbnail || duration <= 0) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const left = clamp((event.clientX - rect.left) / Math.max(rect.width, 1), 0, 1);
+    const time = left * duration;
+    setSeekThumbnail((current) =>
+      current ? { ...current, time, left } : current,
+    );
+    const bucket = Math.floor((time * 1000) / 2000);
+    if (thumbnailBucketRef.current === bucket) return;
+    thumbnailBucketRef.current = bucket;
+    const request = ++thumbnailRequestRef.current;
+    void nativePlayer
+      .thumbnail(time * 1000)
+      .then((image) => {
+        if (image && thumbnailRequestRef.current === request) {
+          setSeekThumbnail({ image, time, left });
+        }
+      })
+      .catch(() => undefined);
+  };
+  const clearSeekThumbnail = () => {
+    thumbnailRequestRef.current += 1;
+    thumbnailBucketRef.current = -1;
+    setSeekThumbnail(null);
+  };
   const commitSeekPreview = (fallback: number) => {
     const target = seekPreviewRef.current ?? fallback;
     if (seekPreviewRef.current === null) return;
@@ -2456,38 +2497,53 @@ export function Player({
       <div className="player-controls">
         <div className="player-timeline">
           <span>{formatTime(displayedTime)}</span>
-          <input
-            aria-label="Seek"
-            type="range"
-            min="0"
-            max={seekLimit}
-            step="0.1"
-            value={Math.min(displayedTime, seekLimit)}
-            onChange={(event) => {
-              const target = Number(event.target.value);
-              seekPreviewRef.current = target;
-              setSeekPreview(target);
-            }}
-            onPointerUp={(event) =>
-              commitSeekPreview(Number(event.currentTarget.value))
-            }
-            onKeyUp={(event) => {
-              if (
-                event.key.startsWith("Arrow") ||
-                event.key === "Home" ||
-                event.key === "End"
-              )
+          <div
+            className="player-seek-control"
+            onPointerMove={previewSeekThumbnail}
+            onPointerLeave={clearSeekThumbnail}
+          >
+            {seekThumbnail && (
+              <div
+                className="player-seek-thumbnail"
+                style={{ "--thumbnail-left": `${seekThumbnail.left * 100}%` } as CSSProperties}
+              >
+                <img src={seekThumbnail.image} alt="" />
+                <span>{formatTime(seekThumbnail.time)}</span>
+              </div>
+            )}
+            <input
+              aria-label="Seek"
+              type="range"
+              min="0"
+              max={seekLimit}
+              step="0.1"
+              value={Math.min(displayedTime, seekLimit)}
+              onChange={(event) => {
+                const target = Number(event.target.value);
+                seekPreviewRef.current = target;
+                setSeekPreview(target);
+              }}
+              onPointerUp={(event) =>
+                commitSeekPreview(Number(event.currentTarget.value))
+              }
+              onKeyUp={(event) => {
+                if (
+                  event.key.startsWith("Arrow") ||
+                  event.key === "Home" ||
+                  event.key === "End"
+                )
+                  commitSeekPreview(Number(event.currentTarget.value));
+              }}
+              onBlur={(event) => {
                 commitSeekPreview(Number(event.currentTarget.value));
-            }}
-            onBlur={(event) => {
-              commitSeekPreview(Number(event.currentTarget.value));
-            }}
-            style={
-              {
-                "--played": `${seekLimit ? (displayedTime / seekLimit) * 100 : 0}%`,
-              } as CSSProperties
-            }
-          />
+              }}
+              style={
+                {
+                  "--played": `${seekLimit ? (displayedTime / seekLimit) * 100 : 0}%`,
+                } as CSSProperties
+              }
+            />
+          </div>
           <span>{formatTime(duration)}</span>
         </div>
         <div className="player-control-row">
