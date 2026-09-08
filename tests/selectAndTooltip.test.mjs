@@ -62,25 +62,28 @@ test("a list is never narrower than readable, nor off the side", () => {
   assert.ok(placed.left >= 8, "runs off the left");
 });
 
-test("a tooltip sits above its target until there is no room", () => {
-  const middle = { top: 400, bottom: 430, left: 600, width: 40 };
-  const above = tooltipPosition(middle, { width: 120, height: 28 }, view);
-  assert.equal(above.placement, "above");
-  assert.equal(above.top, 364);
-  // Centred on the target.
-  assert.equal(above.left, 560);
-
-  const top = { top: 4, bottom: 34, left: 600, width: 40 };
-  assert.equal(tooltipPosition(top, { width: 120, height: 28 }, view).placement, "below");
+test("a tooltip trails the cursor, as the platform's does", () => {
+  // Below and to the right, not centred over the control: centring reads as a
+  // popover the page put there rather than as the pointer's own label.
+  const placed = tooltipPosition({ x: 600, y: 400 }, { width: 120, height: 28 }, view);
+  assert.equal(placed.left, 614);
+  assert.equal(placed.top, 420);
 });
 
-test("a tooltip in a corner stays inside the window", () => {
-  const corner = { top: 400, bottom: 430, left: 2, width: 30 };
-  assert.equal(tooltipPosition(corner, { width: 200, height: 28 }, view).left, 8);
+test("a tooltip flips rather than sitting under the pointer that summoned it", () => {
+  // Against the right edge it goes to the other side of the cursor, so the
+  // pointer is never on top of the text it asked for.
+  const right = tooltipPosition({ x: 1270, y: 400 }, { width: 200, height: 28 }, view);
+  assert.ok(right.left + 200 <= view.width);
+  assert.ok(right.left < 1270, "must move to the left of the cursor");
 
-  const far = { top: 400, bottom: 430, left: 1250, width: 30 };
-  const placed = tooltipPosition(far, { width: 200, height: 28 }, view);
-  assert.ok(placed.left + 200 <= view.width);
+  const bottom = tooltipPosition({ x: 600, y: 790 }, { width: 120, height: 28 }, view);
+  assert.ok(bottom.top + 28 <= view.height);
+  assert.ok(bottom.top < 790, "must move above the cursor");
+
+  // And a cursor in the very corner still leaves it on screen.
+  const corner = tooltipPosition({ x: 2, y: 2 }, { width: 200, height: 28 }, view);
+  assert.ok(corner.left >= 8 && corner.top >= 8);
 });
 
 test("the platform list is suppressed, and only where there is a mouse", () => {
@@ -93,6 +96,11 @@ test("the platform list is suppressed, and only where there is a mouse", () => {
   assert.match(source, /event\.preventDefault\(\);\s*\n\s*if \(rest\.disabled\) return;/);
   // A phone keeps its own picker, which is better than anything here.
   assert.match(source, /\(hover: hover\) and \(pointer: fine\)/);
+  // Scrolling the list is not scrolling away from it, and a press outside is
+  // caught by a listener rather than swallowed by a full-screen scrim — the
+  // scrim made opening a second dropdown take two clicks.
+  assert.match(source, /if \(menu\.current\?\.contains\(event\.target as Node\)\) return;/);
+  assert.doesNotMatch(source, /select-scrim/);
   // And the element itself stays: it is what the stylesheets target, what a
   // screen reader announces, and what holds the value.
   assert.match(source, /<select\n\s*\{\.\.\.rest\}/);

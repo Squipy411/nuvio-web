@@ -49,6 +49,7 @@ function usesPointer() {
 
 export function Select({ onChange, children, ...rest }: SelectProps) {
   const field = useRef<HTMLSelectElement>(null);
+  const menu = useRef<HTMLDivElement>(null);
   const [custom, setCustom] = useState(false);
   const [open, setOpen] = useState(false);
   const [box, setBox] = useState({ top: 0, left: 0, width: 0 });
@@ -79,15 +80,38 @@ export function Select({ onChange, children, ...rest }: SelectProps) {
 
   useEffect(() => {
     if (!open) return;
-    const close = () => setOpen(false);
-    // Capture, so a scroller between here and the window still closes it: the
-    // menu is positioned in the viewport and would otherwise stay put while
-    // the field it belongs to slid away.
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("resize", close);
+    const inside = (node: EventTarget | null) =>
+      node instanceof Node &&
+      (menu.current?.contains(node) || field.current?.contains(node));
+
+    const onScroll = (event: Event) => {
+      // Scrolling the list is not scrolling away from it. Without this the
+      // capture listener below caught the menu's own scroll and closed it, so
+      // a list long enough to need scrolling could not be scrolled at all.
+      if (menu.current?.contains(event.target as Node)) return;
+      setOpen(false);
+    };
+    // Capture, so a scroller anywhere between the field and the window still
+    // closes this: the menu is positioned in the viewport and would otherwise
+    // stay put while the field it belongs to slid away.
+    const onResize = () => setOpen(false);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", onResize);
+
+    // Dismissed by a press outside rather than by a full-screen scrim. The
+    // scrim swallowed that press, so opening a second dropdown took two
+    // clicks: one to dismiss the first, and another that finally reached the
+    // field. Nothing is covered now, so the press that closes this one also
+    // opens the next.
+    const onPress = (event: PointerEvent) => {
+      if (inside(event.target)) return;
+      setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPress, true);
     return () => {
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onResize);
+      document.removeEventListener("pointerdown", onPress, true);
     };
   }, [open]);
 
@@ -178,15 +202,12 @@ export function Select({ onChange, children, ...rest }: SelectProps) {
       {custom &&
         open &&
         createPortal(
-          <>
-            {/* Catches the press that dismisses it, so a click outside closes
-                the list rather than also pressing what is under it. */}
-            <div className="select-scrim" onMouseDown={() => setOpen(false)} />
-            <div
-              className="select-menu"
-              role="listbox"
-              style={{ top: box.top, left: box.left, width: box.width }}
-            >
+          <div
+            ref={menu}
+            className="select-menu"
+            role="listbox"
+            style={{ top: box.top, left: box.left, width: box.width }}
+          >
               {options.map((option, index) => (
                 <button
                   key={option.value}
@@ -204,9 +225,8 @@ export function Select({ onChange, children, ...rest }: SelectProps) {
                   <span>{option.label}</span>
                   {option.value === value && <Check />}
                 </button>
-              ))}
-            </div>
-          </>,
+            ))}
+          </div>,
           document.body,
         )}
     </>

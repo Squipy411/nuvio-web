@@ -3701,11 +3701,6 @@ html.native-player-active.native-player-covered .player-view.native-player {
    anything here would be. Positioned in the viewport and rendered at the end
    of the document, so a field inside a scrolling panel or a player overlay
    opens a list that is not clipped by either. */
-.select-scrim {
-  position: fixed;
-  z-index: 320;
-  inset: 0;
-}
 .select-menu {
   position: fixed;
   z-index: 321;
@@ -3801,24 +3796,9 @@ html.native-player-active.native-player-covered .player-view.native-player {
 @keyframes app-tooltip-in {
   from {
     opacity: 0;
-    transform: translateY(3px);
   }
   to {
     opacity: 1;
-    transform: none;
-  }
-}
-.app-tooltip.is-below {
-  animation-name: app-tooltip-in-below;
-}
-@keyframes app-tooltip-in-below {
-  from {
-    opacity: 0;
-    transform: translateY(-3px);
-  }
-  to {
-    opacity: 1;
-    transform: none;
   }
 }
 @media (prefers-reduced-motion: reduce) {
