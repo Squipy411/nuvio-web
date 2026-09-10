@@ -2684,7 +2684,12 @@ export function Player({
                       <input
                         type="checkbox"
                         checked={hdrEnabled}
-                        disabled={!hdrControlSupported}
+                        disabled={!hdrControlSupported || decoding}
+                        title={
+                          decoding
+                            ? "HDR output is unavailable during canvas playback."
+                            : undefined
+                        }
                         onChange={(event) => setHdrEnabled(event.target.checked)}
                       />
                     </label>
