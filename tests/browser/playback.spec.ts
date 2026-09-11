@@ -1,13 +1,41 @@
 import { expect, test, type Page } from "@playwright/test";
 
-test.afterEach(async ({ page }) => {
+test.beforeEach(async ({ page }) => {
+  if (process.env.NUVIO_FORCE_MSE !== "1") return;
+  await page.addInitScript(() => {
+    const original = HTMLMediaElement.prototype.canPlayType;
+    HTMLMediaElement.prototype.canPlayType = function (type: string) {
+      if (/^(?:application|audio)\/(?:vnd\.apple\.mpegurl|x-mpegurl|mpegurl)(?:\s*;|$)/i.test(type.trim())) return "";
+      return original.call(this, type);
+    };
+  });
+});
+
+test.afterEach(async ({ page }, info) => {
   // Browser context teardown does not guarantee pagehide/keepalive delivery.
   // Close through the actual UI so one test cannot consume the next test's slots.
-  const back = page.getByRole("button", { name: "Back", exact: true });
-  if (!page.isClosed() && await back.count()) {
-    await back.click({ force: true });
-    await expect(page.getByText("Playback stopped", { exact: true })).toBeVisible();
-  }
+  // A body may already be closing its player: never wait a full test timeout for
+  // a disappearing Back button, or replace the original failure with teardown.
+  if (page.isClosed()) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let cleanupError: unknown;
+  const cleanup = async () => {
+    try {
+      const back = page.getByRole("button", { name: "Back", exact: true });
+      if (await back.count()) {
+        await back.click({ force: true, timeout: 1000 });
+        await expect(page.getByText("Playback stopped", { exact: true })).toBeVisible({ timeout: 1000 });
+        return;
+      }
+    } catch (error) { cleanupError = error; }
+    if (!page.isClosed()) await page.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+  };
+  await Promise.race([
+    cleanup().catch((error: unknown) => { cleanupError ??= error; }),
+    new Promise<void>((resolve) => { timer = setTimeout(resolve, 2800); }),
+  ]);
+  clearTimeout(timer);
+  if (cleanupError) info.annotations.push({ type: "cleanup", description: "UI teardown raced with player close; used pagehide fallback. Body assertions are unchanged." });
 });
 
 async function moving(page: Page) {
@@ -81,6 +109,7 @@ test("real player pause, resume, seeks, subtitle selection, audio switching, key
   await page.keyboard.press("f"); await expect.poll(() => page.evaluate(() => !!document.fullscreenElement)).toBe(true);
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Back", exact: true }).click({ force: true });
+  await expect(page.getByText("Playback stopped", { exact: true })).toBeVisible();
   await expect.poll(() => page.evaluate(() => JSON.parse(document.documentElement.dataset.progress || "{}").position)).toBeGreaterThan(10_000);
 });
 test("a paused companion seek keeps the picture paused and resumes at the requested original position", async ({ page }) => {
