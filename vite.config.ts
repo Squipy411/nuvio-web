@@ -80,14 +80,16 @@ export default defineConfig(({ mode }) => {
         // every later change appeared not to apply. The plan says not to port
         // the service worker; this is where that is enforced.
         disable: !!platformModule,
-        // "prompt", not "autoUpdate": autoUpdate reloads the page as soon as a
-        // new worker takes control, which restarted the app mid-boot.
+        // Download automatically, then activate automatically only after the
+        // waiting worker confirms every open tab is idle. autoUpdate would
+        // delete old chunks before an ongoing player has finished using them.
         registerType: "prompt",
         includeAssets: [
           "app-icon-1024.png",
           "Nuvio-icon.png",
           "theme-bootstrap.js",
           "nuvio-wordmark.png",
+          "pwa-update-guard.js",
         ],
         manifest: {
           name: "Nuvio Web",
@@ -108,6 +110,9 @@ export default defineConfig(({ mode }) => {
           ]
         },
         workbox: {
+          skipWaiting: false,
+          clientsClaim: true,
+          importScripts: [`${base}pwa-update-guard.js`],
           // The offline shell does not need megabytes of optional media decoders.
           globIgnores: ["**/mediabunnyPlayer-*.js", "**/mediabunny-ac3-*.js", "**/hls-*.js"],
           navigateFallbackDenylist: [/^\/api\//, /^\/healthz$/],

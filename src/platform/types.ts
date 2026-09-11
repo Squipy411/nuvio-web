@@ -158,9 +158,29 @@ export type PlayerState = {
   } | null;
 };
 
+/**
+ * Caption appearance, in the shape the shell's own renderer wants.
+ *
+ * Colours are Android ARGB (`#AARRGGBB`), which is how every Nuvio client
+ * stores them; the shell converts to whatever its subtitle renderer takes.
+ */
+export type SubtitleStyle = {
+  fontSize: number;
+  bold: boolean;
+  textColor: string;
+  backgroundColor: string;
+  outlineEnabled: boolean;
+  outlineColor: string;
+  outlineWidth: number;
+  /** Distance up from the bottom of the picture, 0-100. */
+  bottomOffset: number;
+};
+
 export type PlayerApi = {
   open(source: PlayerSource): Promise<void>;
   state(): Promise<PlayerState>;
+  /** Native seek preview. Absent in browser-only players. */
+  thumbnail?(positionMs: number): Promise<string | undefined>;
   togglePause(): Promise<void>;
   seek(positionMs: number): Promise<void>;
   seekRelative(offsetMs: number): Promise<void>;
@@ -184,6 +204,14 @@ export type PlayerApi = {
   setResizeMode?(mode: ResizeMode): Promise<void>;
   setAudioTrack(id: number): Promise<void>;
   setSubtitleTrack(id: number): Promise<void>;
+  /**
+   * How captions look, changed while they are on screen.
+   *
+   * A browser restyles its own cues with a stylesheet; a shell renders them
+   * itself and has to be told. Optional, like every capability here: a shell
+   * that cannot restyle mid-playback simply does not offer the panel.
+   */
+  setSubtitleStyle?(style: SubtitleStyle): Promise<void>;
   skipSegments?(options: { contentId: string; videoId: string; season?: number; episode?: number; animeSkipEnabled: boolean; animeSkipClientId: string }): Promise<Array<{ startMs: number; endMs: number; type: string; provider: string }>>;
   /** Expands the native window, rather than a transparent webview element. */
   setFullscreen?(fullscreen: boolean): Promise<void>;

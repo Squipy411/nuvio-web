@@ -41,3 +41,16 @@ test("a single oversized active playlist still fails at the resource cap", () =>
   resources.updatePlaylist("root", new Set([first, second]));
   assert.throws(() => resources.register("https://media.example/3.ts"), /too many active/);
 });
+test("large VOD refreshes reuse IDs without scanning all existing URLs", () => {
+  const resources = new HlsResources();
+  resources.set("root", "https://media.example/vod.m3u8");
+  const urls = Array.from({ length: 8000 }, (_, i) => `https://media.example/${i}.ts`);
+  const ids = urls.map((url) => resources.register(url));
+  resources.updatePlaylist("root", new Set(ids));
+  // A reverse index means refresh never needs the inherited full-map iterator.
+  resources[Symbol.iterator] = () => { throw new Error("Unexpected full URL scan"); };
+  assert.deepEqual(urls.map((url) => resources.register(url)), ids);
+  resources.delete(ids[0]); assert.notEqual(resources.register(urls[0]), ids[0]);
+  resources.clear(); assert.equal(resources.size, 0);
+  const fresh = resources.register(urls[1]); assert.notEqual(fresh, ids[1]);
+});

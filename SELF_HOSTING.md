@@ -52,6 +52,10 @@ The 3 GiB companion memory limit includes its tmpfs usage. High bitrate or 4K
 conversion can exceed a small server's CPU/RAM budget. Select 1080p or 720p under
 Playback settings when needed; direct, remux and audio-only paths keep the video
 resolution and do not use that downscale setting.
+New browser installations default to Automatic with a 1080p full-conversion cap;
+an explicitly saved resolution is retained. Generated server playback runs at
+normal 1× speed to match bounded segment production. The saved speed preference
+is kept and restored for direct/relay playback.
 
 ### Internet access and account restrictions
 
@@ -60,6 +64,12 @@ Host header and preserve streaming responses; disable proxy buffering. Do not
 expose the companion directly. Set `COMPANION_ALLOWED_USERS` to your comma-separated
 Nuvio user IDs before public exposure. Empty means any valid account on the
 configured Nuvio backend can authenticate; it does **not** mean anonymous access.
+For HTTPS domains also set `COMPANION_PUBLIC_ORIGINS` to the exact allowed browser
+origin(s), for example `https://watch.example.com`. No wildcard origins or trusted
+client forwarding headers are used. See [Nginx Proxy Manager and Cloudflare Tunnel
+setup](PROXY_SETUP.md) for exact settings, cache exclusions, and Cloudflare's
+video-delivery restrictions. A tunnel is not a guarantee of unrestricted video
+delivery, and proxying cannot overcome an overloaded CPU or slow source.
 
 The auth Worker exchanges the current Nuvio access token for a short-lived
 HttpOnly, SameSite cookie and CSRF value. UI code never receives the Nuvio token.
@@ -93,9 +103,20 @@ Before importing the Compose file, authenticate the Zima host to `ghcr.io` as
 `Squipy411` using a GitHub personal access token (classic) with only
 `read:packages`. Enter that credential in the host's registry login, **never**
 in Compose, this repository, a command-line password argument, or this chat.
-Docker's interactive command is `docker login ghcr.io --username Squipy411`;
-paste the token only at its hidden password prompt. The credential must belong
-to the Docker environment that actually pulls the Zima app images.
+On this ZimaOS installation `/root` is read-only. Use the writable login directory
+that already worked, not Docker's default `/root/.docker` location:
+
+```sh
+sudo mkdir -p /DATA/docker-auth
+sudo chmod 700 /DATA/docker-auth
+sudo docker --config /DATA/docker-auth login ghcr.io --username Squipy411
+```
+
+Enter the Zima password if `sudo` asks, then the GitHub token at Docker's hidden
+password prompt. The credential must belong to the Docker environment that
+actually pulls the Zima app images. Docker's unencrypted-credential warning is
+expected without a credential helper: the directory is root-only, but the saved
+token must still be protected. Do not print or share its `config.json`.
 If the dashboard does not use that login, pull both exact image references from
 the installer on the host first, then import the app. Dashboard-specific private
 registry handling has not been verified on a live ZimaOS install in this task.
@@ -108,10 +129,46 @@ but needs the redistribution permission described in
 of the workflow's intentional private-image gate before an anonymous pull check.
 See [GitHub's registry documentation](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry).
 
-To update, import the generated installer from the next successful workflow run
-or update both image tags together. Commit-pinned images make rollback explicit.
+### Update the existing Zima app without deleting it
+
+1. Wait for GitHub's **Verify and publish personal self-hosted images** workflow
+   to finish successfully. Open
+   its generated `docker-compose.zima.yml` installer and copy both complete
+   `image:` values. Both should have the same `sha-…` release tag.
+2. Download both images on Zima, one at a time, using the saved login:
+
+   ```sh
+   sudo docker --config /DATA/docker-auth pull ghcr.io/squipy411/nuvio-web-web:sha-RELEASE_COMMIT
+   sudo docker --config /DATA/docker-auth pull ghcr.io/squipy411/nuvio-web-companion:sha-RELEASE_COMMIT
+   ```
+
+   **Replace `sha-RELEASE_COMMIT` with the full tag from that successful release.**
+   Do not copy an old tag from an earlier chat message. If a pull says denied,
+   repeat the login above only if necessary; private images cannot use anonymous
+   download mirrors. A dashboard may not read this custom login directory.
+3. Open the **existing Nuvio app's Edit/Docker configuration** on the Zima
+   dashboard. Save a copy of its current configuration for rollback. Change the
+   web image and companion image together to those exact newly downloaded tags.
+   Preserve its port, network, memory settings and any personal environment
+   values. Do **not** delete the app or create a second stack on the same port.
+4. Save/apply the edit so Zima recreates the two containers. Open the same app
+   address; a new PWA build applies automatically when all Nuvio tabs have closed
+   playback and finished queued sync writes. For the first upgrade from an older
+   build, close/reopen old tabs or accept their existing update prompt. Merely
+   restarting an old commit-pinned image does not install a new version.
+5. Check companion status and play a known-good source. If the dashboard still
+   forces an anonymous pull despite images being present, stop and inspect its
+   new error; do not make the packages public or remove account data to fix it.
+
+The user verified registry login and the previous web-image pull on the actual
+Zima terminal. The dashboard's edit flow/private-registry integration remains
+host-version-dependent and has not been exercised by these repository tests.
+Commit-pinned images make rollback explicit: restore **both** previous image tags
+from the saved configuration. Keep the same Nuvio account, selected profile and
+browser address to retain cloud sync and origin-local preferences.
 Restart removes ephemeral playback sessions; reselect the source to resume from
-the last Nuvio checkpoint. PWA updates use the existing prompted replacement flow;
+the last Nuvio checkpoint. PWA updates download in the background, then activate
+only after all open tabs acknowledge that playback and queued sync writes are idle;
 the server does not cache index/service-worker files, and private media is never
 stored in the service-worker cache.
 
@@ -121,6 +178,13 @@ Automatic first tries the browser. Native HLS is retained where supported;
 HLS.js is available through MSE and can recover from an unsuccessful native HLS
 attempt before any extra encoding. Required provider headers, mixed-content
 restrictions or decoding failures engage the companion.
+
+Torrentio and DuckStreams remain normal Nuvio addons: keep their existing TorBox
+configuration. Redirected/extensionless HLS links and required provider headers
+are handled without hard-coding CDN hostnames. A brief network failure retries
+the same playback mode instead of needlessly escalating to CPU-heavy conversion;
+an unavailable or uncached provider file still needs a different working source.
+The app does not automatically submit torrents or change provider credentials.
 
 | Source when browser access/decoding fails | Companion action |
 | --- | --- |
@@ -134,6 +198,8 @@ restrictions or decoding failures engage the companion.
 Remux and audio-only conversion preserve original video quality. Software full
 conversion uses the `veryfast` preset, progressive 2-second fMP4 HLS segments and
 a rolling window; it does not download or preconvert the whole movie first.
+The initial read burst covers 20 seconds, followed by bounded real-time reading;
+the rolling window retains up to 24 segments within the existing memory budget.
 Seek/resume restarts generated output at the requested source offset, while
 progress reporting stays in original-media time. Audio language, codec, channels
 and titles are exposed; selecting a different companion audio track creates real
@@ -166,6 +232,25 @@ menus while preserving browser fullscreen behavior.
 PWA installation and service workers require HTTPS (or localhost). Plain LAN
 HTTP opens the web app, but does not supply installable-PWA capabilities on phones.
 Safari/iOS system media controls and codec availability remain device-dependent.
+
+## September playback and sync update
+
+This update includes the original project's newer player controls, subtitle
+preferences, source picker and large-season rendering improvements. It preserves
+the existing Nuvio account/profile, addon and progress formats; it does not replace
+the app with the earlier experimental website.
+
+Account/profile-scoped incremental sync, ordered progress saves, session-change
+guards and quiet foreground refresh reduce stale progress and cross-account
+races. Cloud writes still need connectivity: this is not a durable offline sync
+outbox, and simultaneous edits from different devices follow the backend's rules.
+
+Verification uses generated, authorized test media and isolated authentication
+fixtures. No live TorBox account, user's Nuvio account, physical iPhone, high-bitrate
+4K movie, live tunnel, or existing Zima dashboard was tested here. The generated
+long-keyframe 320×180 remux fixture produced its first segment in about 0.13 seconds
+with the new burst versus 8.1 seconds with the old burst on the test host; this
+is a narrow regression measurement, not a promise about every source or Zima CPU.
 
 ## Developer verification (not Zima installation instructions)
 

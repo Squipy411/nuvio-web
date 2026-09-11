@@ -7,10 +7,19 @@ type BrowserSession = { owner: string; csrf: string; expires: number };
 const sessions = new Map<string, BrowserSession>();
 const attempts = new Map<string, { count: number; until: number }>();
 export const opaqueId = () => randomBytes(24).toString("base64url");
+function browserSessionId(request: IncomingMessage) {
+  return request.headers.cookie?.split(";").map((part) => part.trim()).find((part) => part.startsWith("nuvio_companion="))?.slice("nuvio_companion=".length);
+}
 export function sameOrigin(request: IncomingMessage) {
   try {
-    const origin = new URL(String(request.headers.origin));
-    if (!["http:", "https:"].includes(origin.protocol) || origin.host !== request.headers.host || request.headers["sec-fetch-site"] === "cross-site") throw new Error();
+    const value = request.headers.origin;
+    if (typeof value !== "string") throw new Error();
+    const origin = new URL(value);
+    // The edge must preserve Host. Never infer browser origin from spoofable
+    // Forwarded/X-Forwarded-* headers or from the private HTTP proxy hop.
+    if (!["http:", "https:"].includes(origin.protocol) || value !== origin.origin || origin.host !== request.headers.host || request.headers["sec-fetch-site"] === "cross-site") throw new Error();
+    if (config.publicOrigins.length && !config.publicOrigins.includes(origin.origin)) throw new Error();
+    return origin;
   } catch { throw new HttpError(403, "Same-origin access is required."); }
 }
 export function rateLimit(key: string, maximum = 20) {
@@ -22,7 +31,7 @@ export function rateLimit(key: string, maximum = 20) {
   if (entry.count > maximum) throw new HttpError(429, "Too many requests. Try again shortly.");
 }
 export async function exchange(request: IncomingMessage, response: ServerResponse, input: { backend: string }, network: typeof safeRequest = safeRequest) {
-  sameOrigin(request); rateLimit(`auth:${request.socket.remoteAddress}`);
+  const origin = sameOrigin(request); rateLimit(`auth:${request.socket.remoteAddress}`);
   if (input.backend.replace(/\/+$/, "") !== config.backendUrl) throw new HttpError(403, "This companion is configured for a different Nuvio backend.");
   const authorization = request.headers.authorization;
   if (!authorization?.startsWith("Bearer ") || authorization.length > 16_384) throw new HttpError(401, "Sign into Nuvio first.");
@@ -32,14 +41,23 @@ export async function exchange(request: IncomingMessage, response: ServerRespons
   if (typeof user.id !== "string" || !/^[a-zA-Z0-9_-]{1,100}$/.test(user.id)) throw new HttpError(401, "Nuvio returned an invalid user.");
   if (config.allowedUsers.length && !config.allowedUsers.includes(user.id)) throw new HttpError(403, "This Nuvio account is not enabled on this companion.");
   for (const [key, session] of sessions) if (session.expires < Date.now()) sessions.delete(key);
-  if (sessions.size >= 512) throw new HttpError(503, "Too many active browser sessions.");
-  const id = opaqueId(); const session = { owner: user.id, csrf: opaqueId(), expires: Date.now() + 30 * 60_000 };
+  const previousId = browserSessionId(request);
+  const previous = previousId ? sessions.get(previousId) : undefined;
+  // Cookies are shared across tabs. Rotating the cookie/CSRF on every verified
+  // exchange would invalidate other tabs and race with long-playback renewal.
+  // Reuse only after verifying the current Nuvio token belongs to the SAME owner.
+  const reuse = previous?.owner === user.id;
+  if (previousId && previous && !reuse) sessions.delete(previousId);
+  if (!reuse && sessions.size >= 512) throw new HttpError(503, "Too many active browser sessions.");
+  const id = reuse ? previousId! : opaqueId();
+  const session = reuse ? previous! : { owner: user.id, csrf: opaqueId(), expires: 0 };
+  session.expires = Date.now() + 30 * 60_000;
   sessions.set(id, session);
-  response.setHeader("Set-Cookie", `nuvio_companion=${id}; HttpOnly; SameSite=Strict; Path=/api/companion; Max-Age=1800${request.headers.origin?.startsWith("https:") ? "; Secure" : ""}`);
+  response.setHeader("Set-Cookie", `nuvio_companion=${id}; HttpOnly; SameSite=Strict; Path=/api/companion; Max-Age=1800${origin.protocol === "https:" ? "; Secure" : ""}`);
   return { csrf: session.csrf, expires: session.expires };
 }
 export function authenticate(request: IncomingMessage, mutation = false) {
-  const id = request.headers.cookie?.split(";").map((part) => part.trim()).find((part) => part.startsWith("nuvio_companion="))?.slice("nuvio_companion=".length);
+  const id = browserSessionId(request);
   const session = id ? sessions.get(id) : null;
   if (!session || session.expires < Date.now()) throw new HttpError(401, "Reconnect the companion using your Nuvio session.");
   if (mutation) {
@@ -52,6 +70,6 @@ export function authenticate(request: IncomingMessage, mutation = false) {
 export function revoke(request: IncomingMessage, response: ServerResponse) {
   const owner = authenticate(request, true).owner;
   for (const [id, session] of sessions) if (session.owner === owner) sessions.delete(id);
-  response.setHeader("Set-Cookie", "nuvio_companion=; HttpOnly; SameSite=Strict; Path=/api/companion; Max-Age=0");
+  response.setHeader("Set-Cookie", `nuvio_companion=; HttpOnly; SameSite=Strict; Path=/api/companion; Max-Age=0${sameOrigin(request).protocol === "https:" ? "; Secure" : ""}`);
   return owner;
 }

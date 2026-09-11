@@ -1,4 +1,5 @@
 import type { WebPlayerSettings } from "../lib/webSettings";
+import { Select } from "./Select";
 import type { SyncPreferenceType } from "../lib/settingsBlob";
 import { platform } from "../platform/index.ts";
 
@@ -21,9 +22,9 @@ export function PlaybackPolicySettings({ section, settings, ready, addonNames = 
     {toggle("Prefer the same release", "Try the current stream's binge group for the next episode.", "stream_auto_play_prefer_binge_group", settings.preferBingeGroup)}
     {toggle("Allow next-episode fallback", "In manual source mode, allow another source if auto-play is enabled and the same release is unavailable. Otherwise open source selection.", "stream_auto_play_next_episode_fallback_enabled", settings.autoPlayNextEpisodeFallback)}
     <label className="setting-select-row"><span><strong>Show next episode</strong><small>Known end credits are used unless a post-credit scene extends beyond this threshold.</small></span>
-      <select disabled={!ready} value={settings.nextEpisodeThresholdMode} onChange={(event) => save("next_episode_threshold_mode", "string", event.target.value)}>
+      <Select disabled={!ready} value={settings.nextEpisodeThresholdMode} onChange={(event) => save("next_episode_threshold_mode", "string", event.target.value)}>
         <option value="PERCENTAGE">Percentage watched</option><option value="MINUTES_BEFORE_END">Minutes before the end</option>
-      </select>
+      </Select>
     </label>
     <label className="setting-text-row"><span><strong>{settings.nextEpisodeThresholdMode === "PERCENTAGE" ? "Watched percentage (97–100%)" : "Minutes remaining (0–3.5)"}</strong></span>
       <input type="number" disabled={!ready} min={settings.nextEpisodeThresholdMode === "PERCENTAGE" ? 97 : 0} max={settings.nextEpisodeThresholdMode === "PERCENTAGE" ? 100 : 3.5} step="0.1"
@@ -33,14 +34,14 @@ export function PlaybackPolicySettings({ section, settings, ready, addonNames = 
   </>;
   if (section === "scope") return <>
     <label className="setting-select-row"><span><strong>Source selection wait</strong><small>Maximum wait for addon responses before automatically choosing. All sources remain available for manual selection.</small></span>
-      <select disabled={!ready} value={settings.autoPlayTimeoutSeconds} onChange={(event) => save("stream_auto_play_timeout_seconds", "int", Number(event.target.value))}>
+      <Select disabled={!ready} value={settings.autoPlayTimeoutSeconds} onChange={(event) => save("stream_auto_play_timeout_seconds", "int", Number(event.target.value))}>
         {[0,1,2,3,4,5,6,7,8,9,10,15,20,25,30,2147483647].map((value) => <option key={value} value={value}>{value === 2147483647 ? "Wait for all sources" : `${value} seconds`}</option>)}
-      </select>
+      </Select>
     </label>
     <label className="setting-select-row"><span><strong>Auto-play sources</strong><small>Plugins are unavailable in this shared client. A synced plugins-only selection will require manual source selection.</small></span>
-      <select disabled={!ready} value={settings.autoPlaySource} onChange={(event) => save("stream_auto_play_source", "string", event.target.value)}>
+      <Select disabled={!ready} value={settings.autoPlaySource} onChange={(event) => save("stream_auto_play_source", "string", event.target.value)}>
         <option value="ALL_SOURCES">All sources</option><option value="INSTALLED_ADDONS_ONLY">Installed addons only</option><option value="ENABLED_PLUGINS_ONLY" disabled>Enabled plugins only (unavailable)</option>
-      </select>
+      </Select>
     </label>
     <details className="playback-addon-scope"><summary>Choose auto-play addons</summary><p>No selection means all installed addons. This does not hide sources from the manual list.</p>
       <div className="toggle-list">{[...new Set([...addonNames, ...settings.autoPlaySelectedAddons])].map((name) => <label className="toggle-row" key={name}><span>{name}</span><span className="switch"><input type="checkbox" disabled={!ready} checked={settings.autoPlaySelectedAddons.includes(name)} onChange={(event) => save("stream_auto_play_selected_addons", "string_set", event.target.checked ? [...settings.autoPlaySelectedAddons, name] : settings.autoPlaySelectedAddons.filter((value) => value !== name))} /><i /></span></label>)}</div>

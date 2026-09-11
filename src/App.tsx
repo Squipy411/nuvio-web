@@ -65,6 +65,8 @@ import {
   loadAddons,
   loadAvatarCatalog,
   loadLibrary,
+  accountSyncState,
+  currentSession,
   createProfile,
   loadProfiles,
   addToLibrary,
@@ -110,8 +112,6 @@ import {
 import {
   applyUpdate,
   checkForUpdate,
-  subscribeUpdate,
-  updateReady,
 } from "./lib/appUpdate";
 import {
   LOCALES,
@@ -134,6 +134,8 @@ import {
 import {
   canReturnToApp,
   isAndroid,
+  canPlayInApp,
+  isInAppPlayer,
   isAppleMobile,
   isInstalledAppleWebApp,
   isMacOS,
@@ -173,6 +175,8 @@ import { useProgressiveList } from "./lib/useProgressiveList";
 import { useScrollLock } from "./lib/useScrollLock";
 import { ContinueLoadingOverlay } from "./components/ContinueLoadingOverlay";
 import { useSwipeBack } from "./lib/useSwipeBack";
+import { installTooltips } from "./lib/tooltip";
+import { Select } from "./components/Select";
 import { providerCredential } from "./lib/providerCredentials";
 import type { MetadataEnrichmentConfig } from "./lib/metadataEnrichment";
 import {
@@ -185,6 +189,11 @@ import { readDebridRules } from "./lib/webSettings";
 import { applyDebridStreamSettings } from "./lib/debridStreams";
 import {
   readWebSettings,
+  POSTER_DEFAULTS,
+  POSTER_SCALE_MAX,
+  POSTER_SCALE_MIN,
+  posterScale,
+  posterSizeAt,
   type ContinueWatchingSettings,
   type PosterSettings,
   type WebSettings,
@@ -401,7 +410,6 @@ export function App() {
   addonRowsRef.current = addonRows;
   const addonsRef = useRef(addons);
   addonsRef.current = addons;
-  const addonWriteQueue = useRef<Promise<void>>(Promise.resolve());
   const addonRevision = useRef(0);
   const [sections, setSections] = useState<CatalogSection[]>([]);
   const [library, setLibrary] = useState<LibraryItem[]>([]);
@@ -418,7 +426,6 @@ export function App() {
   // silently restore an older full blob over a newer one.
   const settingsBlobRef = useRef<SettingsBlob | null>(null);
   settingsBlobRef.current = settingsBlob;
-  const settingsWriteQueue = useRef<Promise<void>>(Promise.resolve());
   const settingsRevision = useRef(0);
   const [pinTarget, setPinTarget] = useState<Profile | null>(null);
   const [rememberProfile, setRememberProfile] = useState(
@@ -522,9 +529,16 @@ export function App() {
     const stored = localStorage.getItem(
       "nuvio-web-external-player",
     ) as ExternalPlayerMode | null;
-    return stored && platform.externalPlayer.isAvailable(stored)
-      ? stored
-      : "internal";
+    if (stored && platform.externalPlayer.isAvailable(stored)) return stored;
+    // "internal" is the default everywhere it exists. Where it does not, the
+    // first player this device can actually use is a better start than a
+    // setting that silently means nothing.
+    if (canPlayInApp()) return "internal";
+    // Outplayer remains the reliable first choice on iOS unless the viewer
+    // explicitly changes it.
+    if (isAppleMobile() && platform.externalPlayer.isAvailable("outplayer"))
+      return "outplayer";
+    return platform.externalPlayer.options("settings")[0]?.mode ?? "copy";
   });
   /**
    * The one thing this app reads from its own address.
@@ -602,7 +616,42 @@ export function App() {
     meta: Meta;
     video?: Video;
     startAtBeginning?: boolean;
+    /**
+     * Which in-app player to use. Carried on the launch rather than read from
+     * settings inside the player, because the sources panel can choose one for
+     * a single stream without changing what the next one uses.
+     */
+    mode?: ExternalPlayerMode;
+    /**
+     * Where to resume, when the launch knows better than the saved progress
+     * does. Swapping release mid-episode is the case: playback is seconds
+     * ahead of the last write, and restarting from that write would visibly
+     * step backwards.
+     */
+    resumeMs?: number;
   } | null>(null);
+  /**
+   * The other releases of whatever is playing, for the player's own picker.
+   *
+   * Held here rather than in the sources sheet: playback is reached from the
+   * sheet, from Continue Watching and from a remembered link, and only the
+   * first of those ever had a list. Fetched when the picker is first opened,
+   * which for most playback is never.
+   */
+  const [playerSources, setPlayerSources] = useState<Stream[]>([]);
+  const [playerSourcesBusy, setPlayerSourcesBusy] = useState(false);
+  const playerSourceRequest = useRef(0);
+  // Read by the picker's fetch, which must not be rebuilt every time playback
+  // state changes underneath it.
+  const playbackRef = useRef(playback);
+  playbackRef.current = playback;
+  // A different episode is a different set of releases, so what was fetched
+  // for the last one is dropped rather than offered for this one.
+  useEffect(() => {
+    playerSourceRequest.current += 1;
+    setPlayerSources([]);
+    setPlayerSourcesBusy(false);
+  }, [playback?.meta.id, playback?.video?.id]);
   const [loading, setLoading] = useState(false);
   const [resolvingContinue, setResolvingContinue] = useState<Meta | null>(null);
   useScrollLock(resolvingContinue !== null);
@@ -672,15 +721,6 @@ export function App() {
   // and touching it during render would make search history a layout cost.
   const [recentSearches, setRecentSearches] = useState<string[]>(readRecentSearches);
   const [searchFocused, setSearchFocused] = useState(false);
-  const [hasUpdate, setHasUpdate] = useState(updateReady);
-  useEffect(() => subscribeUpdate(() => setHasUpdate(true)), []);
-  // Ask once at startup rather than waiting for the browser's own schedule,
-  // which can be hours — long enough to keep running a build you replaced.
-  useEffect(() => {
-    void checkForUpdate({ prompt: true }).then((result) => {
-      if (result === "pending") setHasUpdate(true);
-    });
-  }, []);
   const activateProfile = useCallback((next: Profile | null) => {
     episodeSwitch.current += 1;
     setResolvingContinue(null);
@@ -725,6 +765,11 @@ export function App() {
       })
       .finally(() => setBooting(false));
   }, []);
+  useEffect(() => platform.auth.onSessionLost(() => {
+    activateProfile(null);
+    setSession(null);
+    setProfiles([]);
+  }), [activateProfile]);
   /**
    * Puts this browser in the account's device list, and keeps it there.
    *
@@ -917,6 +962,7 @@ export function App() {
     const addonProfileIndex = effectiveAddonProfileIndex(profile);
     const generation = profileGeneration.current;
     const loadGeneration = ++profileLoadGeneration.current;
+    const readRevision = accountSyncState(profileIndex).revision;
     // Switching profiles restarts every load, and a stale one finishing after
     // a newer one starts is the classic way a page ends up empty. Each run
     // announces itself so a broken switch can be told apart from a broken
@@ -933,20 +979,20 @@ export function App() {
       // slowest request — usually the watched history — held up the rows.
       const libraryTask = loadLibrary(profileIndex)
         .then((items) => {
-          if (isCurrent()) setLibrary(items);
+          if (isCurrent() && !accountSyncState(profileIndex).pending && accountSyncState(profileIndex).revision === readRevision) setLibrary(items);
           return items;
         })
         .catch(() => [] as LibraryItem[]);
       // Snapshot once, then deltas — see lib/watchSync.
       const progressTask = syncProgress(profileIndex)
         .then((rows) => {
-          if (isCurrent()) setProgress(rows);
+          if (isCurrent() && !accountSyncState(profileIndex).pending && accountSyncState(profileIndex).revision === readRevision) setProgress(rows);
           return rows;
         })
         .catch(() => [] as ProgressRow[]);
       const watchedTask = syncWatched(profileIndex)
         .then((items) => {
-          if (isCurrent()) setWatchedItems(items);
+          if (isCurrent() && !accountSyncState(profileIndex).pending && accountSyncState(profileIndex).revision === readRevision) setWatchedItems(items);
           return items;
         })
         .catch(() => [] as WatchedItem[]);
@@ -1089,6 +1135,49 @@ export function App() {
   useEffect(() => {
     loadProfileData();
   }, [loadProfileData]);
+  // A TV/phone may have changed the library or resume point while this tab
+  // was hidden. Refresh just account rows, never the catalogs/player. An
+  // in-flight read cannot replace a newer local save or a switched profile.
+  useEffect(() => {
+    if (!session || !profile || loading) return;
+    const profileIndex = profile.profileIndex;
+    const generation = profileGeneration.current;
+    let disposed = false;
+    let inFlight = false;
+    let lastAttempt = 0;
+    const refresh = async () => {
+      const writes = accountSyncState(profileIndex);
+      if (disposed || inFlight || writes.pending || playbackRef.current ||
+          document.visibilityState !== "visible" || navigator.onLine === false ||
+          hydratedProfileIndexRef.current !== profileIndex ||
+          Date.now() - lastAttempt < 30_000) return;
+      lastAttempt = Date.now();
+      inFlight = true;
+      const isCurrent = () => !disposed &&
+        generation === profileGeneration.current &&
+        activeProfileIndexRef.current === profileIndex &&
+        !playbackRef.current && accountSyncState(profileIndex).revision === writes.revision;
+      try {
+        await Promise.all([
+          loadLibrary(profileIndex).then((rows) => { if (isCurrent()) setLibrary(rows); }),
+          syncProgress(profileIndex).then((rows) => { if (isCurrent()) setProgress(rows); }),
+          syncWatched(profileIndex).then((rows) => { if (isCurrent()) setWatchedItems(rows); }),
+        ].map((request) => request.catch(() => undefined)));
+      } finally {
+        inFlight = false;
+      }
+    };
+    const onReturn = () => { void refresh(); };
+    window.addEventListener("focus", onReturn);
+    window.addEventListener("online", onReturn);
+    document.addEventListener("visibilitychange", onReturn);
+    return () => {
+      disposed = true;
+      window.removeEventListener("focus", onReturn);
+      window.removeEventListener("online", onReturn);
+      document.removeEventListener("visibilitychange", onReturn);
+    };
+  }, [session, profile, loading]);
   async function runSearch(term = query) {
     if (!term.trim()) return;
     if (term !== query) setQuery(term);
@@ -1132,6 +1221,7 @@ export function App() {
     const profileIndex = profile.profileIndex;
     const generation = profileGeneration.current;
     const revision = ++addonRevision.current;
+    const expectedSession = currentSession();
     const previousRows = addonRowsRef.current;
     const previousAddons = addonsRef.current;
     const normalized = next.map((row, sortOrder) => ({ ...row, sortOrder }));
@@ -1150,18 +1240,16 @@ export function App() {
     setAddonRows(normalized);
     setAddons(optimistic);
 
-    const write = addonWriteQueue.current
-      .catch(() => undefined)
-      // Written back to the same list it was read from. Saving under this
-      // profile's own id would create a shadow list nothing reads.
-      .then(() => saveAddons(effectiveAddonProfileIndex(profile), normalized));
-    addonWriteQueue.current = write.catch(() => undefined);
+    // Queue immediately in the account layer, capturing this login before any
+    // wait. Mirroring profiles still write the primary list they read from.
+    const write = saveAddons(effectiveAddonProfileIndex(profile), normalized);
     const installedTask = refreshContent
       ? loadInstalledAddons(normalized)
       : Promise.resolve(optimistic);
     try {
       const [, installed] = await Promise.all([write, installedTask]);
       if (
+        currentSession() !== expectedSession ||
         generation !== profileGeneration.current ||
         activeProfileIndexRef.current !== profileIndex ||
         revision !== addonRevision.current
@@ -1172,6 +1260,7 @@ export function App() {
       if (refreshContent) {
         const home = await loadHome(installed, undefined, homeLayoutRef.current);
         if (
+          currentSession() === expectedSession &&
           generation === profileGeneration.current &&
           activeProfileIndexRef.current === profileIndex &&
           revision === addonRevision.current
@@ -1180,6 +1269,7 @@ export function App() {
       }
     } catch (error) {
       if (
+        currentSession() !== expectedSession ||
         generation !== profileGeneration.current ||
         activeProfileIndexRef.current !== profileIndex ||
         revision !== addonRevision.current
@@ -1279,14 +1369,15 @@ export function App() {
       const next = transform(current);
       const revision = ++settingsRevision.current;
       const profileIndex = profile.profileIndex;
+      const generation = profileGeneration.current;
+      const expectedSession = currentSession();
       settingsBlobRef.current = next;
       setSettingsBlob(next);
-      const save = settingsWriteQueue.current
-        .catch(() => undefined)
-        .then(() => pushSettingsBlob(profileIndex, next))
-        .then(() => undefined);
-      settingsWriteQueue.current = save.catch(() => undefined);
+      // The account queue captures identity now, not when an earlier save
+      // eventually finishes. It also keeps safe app updates from reloading us.
+      const save = pushSettingsBlob(profileIndex, next);
       void save.catch(async (error) => {
+        if (currentSession() !== expectedSession || generation !== profileGeneration.current) return;
         setMessage(
           error instanceof Error ? error.message : "Could not save settings",
         );
@@ -1297,7 +1388,9 @@ export function App() {
           activeProfileIndexRef.current === profileIndex
         ) {
           const restored = await loadSettingsBlob(profileIndex).catch(() => null);
-          if (restored) {
+          if (restored && currentSession() === expectedSession &&
+              generation === profileGeneration.current &&
+              revision === settingsRevision.current && activeProfileIndexRef.current === profileIndex) {
             settingsBlobRef.current = restored;
             setSettingsBlob(restored);
           }
@@ -1306,6 +1399,25 @@ export function App() {
     },
     [profile],
   );
+
+  /**
+   * The blob keys behind each subtitle style the player can change.
+   *
+   * Kept here rather than in the player: the player asks for a caption to look
+   * a certain way, and where that is written down is this file's business.
+   * These are the same keys the settings page writes, so a change made over
+   * the picture and one made in Settings are the same change.
+   */
+  const SUBTITLE_STYLE_KEYS = {
+    subtitleFontSizeSp: ["subtitle_font_size_sp", "int"],
+    subtitleBottomOffset: ["subtitle_bottom_offset", "int"],
+    subtitleTextColor: ["subtitle_text_color", "string"],
+    subtitleBackgroundColor: ["subtitle_background_color", "string"],
+    subtitleOutlineColor: ["subtitle_outline_color", "string"],
+    subtitleOutlineEnabled: ["subtitle_outline_enabled", "boolean"],
+    subtitleOutlineWidth: ["subtitle_outline_width", "int"],
+    subtitleBold: ["subtitle_bold", "boolean"],
+  } as const satisfies Record<string, readonly [string, SyncPreferenceType]>;
 
   const updateTypedSetting = useCallback(
     (
@@ -1429,6 +1541,10 @@ export function App() {
     },
     [profile],
   );
+
+  // One listener for the whole app, reading the `title` attributes already
+  // there: nothing has to opt in, and anything added later is covered.
+  useEffect(() => installTooltips(), []);
 
   useLayoutEffect(() => {
     // Keep the boot cache through auth/profile loading and failed requests.
@@ -1983,6 +2099,40 @@ export function App() {
     setSelected(item);
   }, []);
 
+  /**
+   * Asks every addon for the releases of what is playing.
+   *
+   * Ordered the way the sources sheet orders them, so the picker in the player
+   * lists the same things in the same order as the sheet it stands in for.
+   * Batches are shown as they land rather than at the end: one slow addon
+   * should not decide how long the menu sits empty.
+   */
+  const loadPlayerSources = useCallback(() => {
+    const current = playbackRef.current;
+    if (!current) return;
+    const request = ++playerSourceRequest.current;
+    setPlayerSources([]);
+    setPlayerSourcesBusy(true);
+    const order = (streams: Stream[]) =>
+      platform.debrid ? applyDebridStreamSettings(streams, debridRules) : streams;
+    void loadStreams(
+      current.meta.type,
+      current.video?.id || current.meta.id,
+      addons,
+      undefined,
+      (_name, _batch, ordered) => {
+        if (request === playerSourceRequest.current) setPlayerSources(order(ordered));
+      },
+    )
+      .then((streams) => {
+        if (request === playerSourceRequest.current) setPlayerSources(order(streams));
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (request === playerSourceRequest.current) setPlayerSourcesBusy(false);
+      });
+  }, [addons, debridRules]);
+
   const openContinueSources = useCallback(
     (card: ContinueCard, startAtBeginning: boolean) => {
       // Claimed before anything else, so tapping a second card supersedes the
@@ -2039,7 +2189,18 @@ export function App() {
             openTitle();
             return;
           }
+          if (!isInAppPlayer(externalPlayer)) {
+            handOffToExternalPlayer(
+              externalPlayer,
+              chosen.url || chosen.externalUrl!,
+              { ...meta, selectedVideoId: target.id },
+              meta.videos.find((entry) => entry.id === target.id) ?? target,
+              startAtBeginning ? 0 : undefined,
+            );
+            return;
+          }
           setPlayback({
+            mode: externalPlayer,
             stream: chosen,
             meta: { ...meta, selectedVideoId: target.id },
             video: meta.videos.find((entry) => entry.id === target.id) ?? target,
@@ -2052,7 +2213,7 @@ export function App() {
           openTitle();
         });
     },
-    [addons, debridRules, webSettings.player.reuseBingeGroup],
+    [addons, debridRules, externalPlayer, webSettings.player.reuseBingeGroup],
   );
 
   const dismissContinueCard = useCallback(
@@ -2085,22 +2246,10 @@ export function App() {
       webSettings.continueWatching,
     ],
   );
-  const updatePrompt = hasUpdate ? (
-    <UpdateModal onLater={() => setHasUpdate(false)} />
-  ) : null;
   if (booting)
-    return (
-      <>
-        {updatePrompt}
-      </>
-    );
+    return null;
   if (!session)
-    return (
-      <>
-        <AuthScreen onSession={setSession} />
-        {updatePrompt}
-      </>
-    );
+    return <AuthScreen onSession={setSession} />;
   // Signed in but nobody chosen yet: the picker, and nothing else. A PIN
   // prompt on its own counts as chosen-but-locked, so it takes precedence.
   if (!profile && !pinTarget)
@@ -2179,7 +2328,6 @@ export function App() {
             </div>
           </div>
         )}
-        {updatePrompt}
       </>
     );
 
@@ -2201,7 +2349,6 @@ export function App() {
             openDetails(item);
           }}
         />
-        {updatePrompt}
       </>
     );
 
@@ -2479,7 +2626,6 @@ export function App() {
           />
         )}
       </main>
-      {updatePrompt}
       <nav
         className="bottom-nav"
         style={
@@ -2541,14 +2687,41 @@ export function App() {
           addons={addons}
           settings={webSettings.player}
           blurUnwatchedEpisodes={webSettings.metaScreen.blurUnwatchedEpisodes}
+          episodeCardStyle={webSettings.metaScreen.episodeCardStyle}
+          tmdbConfig={metadataEnrichment.tmdb}
           animeSkipClientId={providerCredential(providerCredentials, "animeskip", "client_id")}
           startPositionMs={
-            playback.startAtBeginning
-              ? 0
-              : resumePositionMs(playback.meta, playback.video)
+            playback.resumeMs != null
+              ? playback.resumeMs
+              : playback.startAtBeginning
+                ? 0
+                : resumePositionMs(playback.meta, playback.video)
           }
           episodes={playback.meta.videos}
           watchIndex={watchIndex}
+          onSubtitleStyle={(patch) => {
+            for (const [name, value] of Object.entries(patch)) {
+              const entry =
+                SUBTITLE_STYLE_KEYS[name as keyof typeof SUBTITLE_STYLE_KEYS];
+              if (!entry || value === undefined) continue;
+              updateTypedSetting("player_settings", entry[0], entry[1], value);
+            }
+          }}
+          sources={playerSources}
+          streamBadgeSettings={webSettings.streamBadges}
+          sourcesBusy={playerSourcesBusy}
+          onRequestSources={loadPlayerSources}
+          onSelectSource={(next, positionMs) => {
+            // Same title, same episode, different file — so the only things
+            // that change are the release and where it starts.
+            rememberBingeGroup(playback.meta.id, next.behaviorHints?.bingeGroup);
+            setPlayback({
+              ...playback,
+              stream: next,
+              startAtBeginning: false,
+              resumeMs: positionMs,
+            });
+          }}
           onPlayEpisode={(next) => {
             // The same source, not a fresh choice. A binge group names a
             // release that serves a whole run, so continuing within it keeps
@@ -2580,6 +2753,7 @@ export function App() {
                   chosen.behaviorHints?.bingeGroup,
                 );
                 setPlayback({
+                  mode: current.mode,
                   stream: chosen,
                   meta: current.meta,
                   video: next,
@@ -2724,7 +2898,9 @@ export function App() {
             // The picker in the sources panel wins for this launch only.
             const chosen = player ?? externalPlayer;
             const url = stream.url || stream.externalUrl;
-            if (chosen !== "internal" && url) {
+            // "native" plays here too — it is this app's video element, not
+            // somebody else's application, so there is nothing to hand off.
+            if (!isInAppPlayer(chosen) && url) {
               // Details stays open: the stream opened elsewhere, so this page
               // is exactly where you want to be when you come back.
               handOffToExternalPlayer(chosen, url, meta, video);
@@ -2732,6 +2908,7 @@ export function App() {
             }
             rememberBingeGroup(meta.id, stream.behaviorHints?.bingeGroup);
             setPlayback({
+              mode: chosen,
               stream,
               meta,
               video,
@@ -3834,52 +4011,6 @@ function AddonSettings({
   );
 }
 /**
- * Manual update check. The worker only polls on its own schedule, which can be
- * hours; this asks immediately. A found update raises the usual reload prompt
- * rather than restarting the app from under you.
- */
-function UpdateModal({ onLater }: { onLater(): void }) {
-  const [applying, setApplying] = useState(false);
-  return (
-    <div className="update-modal-backdrop" role="presentation">
-      <section
-        className="update-modal"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="update-modal-title"
-      >
-        <span className="update-modal-icon">
-          <RefreshCw />
-        </span>
-        <div>
-          <h2 id="update-modal-title">Nuvio Web update ready</h2>
-          <p>
-            Install the latest version now. The page will reload automatically
-            when it is ready.
-          </p>
-        </div>
-        <div className="update-modal-actions">
-          <button className="secondary" disabled={applying} onClick={onLater}>
-            Later
-          </button>
-          <button
-            className="primary"
-            disabled={applying}
-            onClick={() => {
-              setApplying(true);
-              void applyUpdate();
-            }}
-          >
-            <RefreshCw size={17} className={applying ? "spin-icon" : ""} />
-            {applying ? "Updating…" : "Update now"}
-          </button>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-/**
  * One control, two mechanisms.
  *
  * A browser update is the service worker's: fetch the new bundle, reload. A
@@ -3891,7 +4022,7 @@ function UpdateRow() {
   const shell = platform.updates;
   const [state, setState] = useState<
     "idle" | "checking" | "current" | "pending" | "installing" | "restart"
-  >(!shell && updateReady() ? "pending" : "idle");
+  >("idle");
   const [version, setVersion] = useState("");
   const [available, setAvailable] = useState("");
   /** 0..1, or -1 where the feed declared no length. */
@@ -3935,7 +4066,7 @@ function UpdateRow() {
         return;
       }
       setState("checking");
-      const result = await checkForUpdate({ prompt: false });
+      const result = await checkForUpdate();
       setState(result === "pending" ? "pending" : "current");
       return;
     }
@@ -3980,6 +4111,75 @@ function UpdateRow() {
         </button>
       </div>
     </>
+  );
+}
+
+/**
+ * A number you can actually type into.
+ *
+ * The settings these edit are clamped to a range on the way in, so a plain
+ * controlled input fought every keystroke: clearing 126 to type 90 left an
+ * empty field, which read as 0, which clamped to the minimum and put 88 in the
+ * box before the second digit arrived. What you saw was the number jumping
+ * about on its own.
+ *
+ * So what is typed is held as text and only committed when it is a number the
+ * setting will accept, and the field is squared up against the setting when
+ * focus leaves — an empty or out-of-range box returns to the stored value
+ * rather than silently becoming a different one.
+ */
+function NumberField({
+  label,
+  value,
+  min,
+  max,
+  step = 1,
+  disabled,
+  onCommit,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step?: number;
+  disabled?: boolean;
+  onCommit(next: number): void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  const [editing, setEditing] = useState(false);
+  // While it has focus the box is the author of its own contents; outside that
+  // it follows the setting, which a reset or another device can change.
+  if (!editing && draft !== String(value)) setDraft(String(value));
+  return (
+    <label>
+      <span>{label}</span>
+      <input
+        type="number"
+        inputMode="numeric"
+        min={min}
+        max={max}
+        step={step}
+        value={draft}
+        disabled={disabled}
+        onFocus={() => setEditing(true)}
+        onChange={(event) => {
+          const next = event.target.value;
+          setDraft(next);
+          const parsed = Number(next);
+          if (
+            next.trim() !== "" &&
+            Number.isFinite(parsed) &&
+            parsed >= min &&
+            parsed <= max
+          )
+            onCommit(parsed);
+        }}
+        onBlur={() => {
+          setEditing(false);
+          setDraft(String(value));
+        }}
+      />
+    </label>
   );
 }
 
@@ -4699,7 +4899,7 @@ function SettingsPage({
             <strong>{t("settings.row.tmdbLanguage")}</strong>
             <small>Language requested for localized metadata.</small>
           </span>
-          <select
+          <Select
             value={settings.integrations.tmdbLanguage}
             disabled={!settingsReady || !tmdbKey}
             onChange={(event) =>
@@ -4714,7 +4914,7 @@ function SettingsPage({
             {LANGUAGE_OPTIONS.map(([value, label]) => (
               <option key={value} value={value}>{label}</option>
             ))}
-          </select>
+          </Select>
         </label>
         {[
           ["Artwork and logos", "tmdb_use_artwork", settings.integrations.tmdbUseArtwork],
@@ -4873,7 +5073,7 @@ function SettingsPage({
             <strong>{t("settings.row.desktopNavigation")}</strong>
             <small>Choose a side rail or a compact navigation row.</small>
           </span>
-          <select
+          <Select
             value={settings.desktopNavigationLayout}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -4887,49 +5087,51 @@ function SettingsPage({
           >
             <option value="Sidebar">Sidebar</option>
             <option value="TopBar">Top bar</option>
-          </select>
+          </Select>
         </label>
+        {/* One size rather than a width and a height. Two free numbers let a
+            card be any shape at all, and a poster that is not 2:3 crops its
+            artwork; what anyone actually wants here is bigger or smaller
+            cards. */}
         <div className="setting-grid">
-          <label>
-            <span>Poster width</span>
-            <input
-              type="number"
-              min="88"
-              max="260"
-              value={settings.poster.widthDp}
-              disabled={!settingsReady}
-              onChange={(event) =>
-                onPosterSetting({ widthDp: Number(event.target.value) })
-              }
-            />
-          </label>
-          <label>
-            <span>Poster height</span>
-            <input
-              type="number"
-              min="112"
-              max="390"
-              value={settings.poster.heightDp}
-              disabled={!settingsReady}
-              onChange={(event) =>
-                onPosterSetting({ heightDp: Number(event.target.value) })
-              }
-            />
-          </label>
-          <label>
-            <span>Corner radius</span>
-            <input
-              type="number"
-              min="0"
-              max="40"
-              value={settings.poster.cornerRadiusDp}
-              disabled={!settingsReady}
-              onChange={(event) =>
-                onPosterSetting({ cornerRadiusDp: Number(event.target.value) })
-              }
-            />
-          </label>
+          <NumberField
+            label="Poster size (%)"
+            min={POSTER_SCALE_MIN}
+            max={POSTER_SCALE_MAX}
+            step={5}
+            value={posterScale(settings.poster)}
+            disabled={!settingsReady}
+            onCommit={(percent) => onPosterSetting(posterSizeAt(percent))}
+          />
+          <NumberField
+            label="Corner radius (px)"
+            min={0}
+            max={40}
+            value={settings.poster.cornerRadiusDp}
+            disabled={!settingsReady}
+            onCommit={(cornerRadiusDp) => onPosterSetting({ cornerRadiusDp })}
+          />
+          {/* In the row with the numbers it undoes, bottom-aligned with the
+              boxes rather than with the labels above them. */}
+          <button
+            type="button"
+            className="secondary poster-size-reset"
+            disabled={!settingsReady}
+            onClick={() =>
+              onPosterSetting({
+                widthDp: POSTER_DEFAULTS.widthDp,
+                heightDp: POSTER_DEFAULTS.heightDp,
+                cornerRadiusDp: POSTER_DEFAULTS.cornerRadiusDp,
+              })
+            }
+          >
+            <RotateCcw size={15} /> Reset
+          </button>
         </div>
+        <small className="setting-grid-note">
+          Scales every poster in the app from {POSTER_DEFAULTS.widthDp} ×{" "}
+          {POSTER_DEFAULTS.heightDp}, so they keep their shape.
+        </small>
         <SettingToggle
           title={t("toggle.landscapeCards.title")}
           description={t("toggle.landscapeCards.body")}
@@ -4963,7 +5165,7 @@ function SettingsPage({
             <strong>{t("settings.language.title")}</strong>
             <small>{t("settings.language.description")}</small>
           </span>
-          <select
+          <Select
             value={language}
             onChange={(event) => onLanguage(event.target.value)}
           >
@@ -4973,7 +5175,7 @@ function SettingsPage({
                 {locale.label}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
         <SettingToggle
           title="Show hero section"
@@ -5011,7 +5213,7 @@ function SettingsPage({
             <strong>{t("settings.row.cardStyle")}</strong>
             <small>Use Nuvio's card, wide, or poster layout.</small>
           </span>
-          <select
+          <Select
             value={settings.continueWatching.style}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5021,7 +5223,7 @@ function SettingsPage({
             <option value="Card">Card</option>
             <option value="Wide">Wide</option>
             <option value="Poster">Poster</option>
-          </select>
+          </Select>
         </label>
         <label className="setting-select-row">
           <span>
@@ -5031,7 +5233,7 @@ function SettingsPage({
               own row.
             </small>
           </span>
-          <select
+          <Select
             value={settings.continueWatching.sortMode}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5041,7 +5243,7 @@ function SettingsPage({
             <option value="DEFAULT">Default</option>
             <option value="STREAMING_STYLE">Streaming style</option>
             <option value="SPLIT_UPCOMING">Split upcoming</option>
-          </select>
+          </Select>
         </label>
         <SettingToggle
           title={t("toggle.furthestEpisode.title")}
@@ -5101,7 +5303,7 @@ function SettingsPage({
             <strong>{t("settings.row.background")}</strong>
             <small>Choose how artwork continues behind the detail page.</small>
           </span>
-          <select
+          <Select
             value={settings.metaScreen.backgroundMode}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5111,14 +5313,14 @@ function SettingsPage({
             <option value="normal">Normal</option>
             <option value="cinematic">Cinematic</option>
             <option value="dominant_color">Dominant color</option>
-          </select>
+          </Select>
         </label>
         <label className="setting-select-row">
           <span>
             <strong>{t("settings.row.episodeCards")}</strong>
             <small>List is denser; horizontal keeps larger artwork and summaries.</small>
           </span>
-          <select
+          <Select
             value={settings.metaScreen.episodeCardStyle}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5127,7 +5329,7 @@ function SettingsPage({
           >
             <option value="horizontal">Horizontal</option>
             <option value="list">List</option>
-          </select>
+          </Select>
         </label>
         <SettingToggle
           title={t("toggle.blurUnwatched.title")}
@@ -5199,19 +5401,21 @@ function SettingsPage({
               {isAndroid()
                 ? "Next Player, VLC, MX Player, mpv, and the Android video player chooser open through Android intents."
                 : isAppleMobile()
-                  ? "VLC, Outplayer, and Infuse open through Apple URL schemes."
+                  ? "Outplayer, VLC, and Infuse open as iOS apps."
                   : isMacOS()
                     ? "Infuse and IINA open through macOS URL schemes. VLC registers none on a Mac, so copy the link for it."
                     : "mpv opens through the mpv-handler helper, which has to be installed separately. Otherwise copy the link for your player."}
             </small>
           </span>
-          <select
+          <Select
             value={externalPlayer}
             onChange={(event) =>
               onExternalPlayer(event.target.value as ExternalPlayerMode)
             }
           >
-            <option value="internal">Nuvio web player</option>
+            {canPlayInApp() && (
+              <option value="internal">Nuvio web player</option>
+            )}
             {platform.externalPlayer.options("settings").map((option) => (
               <option key={option.mode} value={option.mode}>
                 {/* Which players can say what happened is the difference
@@ -5220,7 +5424,7 @@ function SettingsPage({
                 {option.reportsBack ? " ✓ reports back" : ""}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
         {/* iOS only, because it is the only platform that cannot be reopened
             by a link. The Shortcut is what carries you back, so it is offered
@@ -5279,7 +5483,7 @@ function SettingsPage({
               never hide the sources that did arrive.
             </small>
           </span>
-          <select
+          <Select
             value={defaultSourceAddon}
             onChange={(event) => onDefaultSourceAddon(event.target.value)}
           >
@@ -5289,7 +5493,7 @@ function SettingsPage({
                 {name}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
         <SettingToggle
           title={t("toggle.loadingOverlay.title")}
@@ -5324,7 +5528,7 @@ function SettingsPage({
             <strong>{t("settings.row.resizeMode")}</strong>
             <small>Fit preserves the whole frame; Zoom/Fill crop it.</small>
           </span>
-          <select
+          <Select
             value={settings.player.resizeMode}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5340,7 +5544,7 @@ function SettingsPage({
             <option value="Zoom">Zoom</option>
             <option value="Fill">Fill</option>
             <option value="Stretch">Stretch</option>
-          </select>
+          </Select>
         </label>
         {/* Only where a shell can actually drive it. The capability is absent
             in a browser, on a Mac, and on a Windows machine with no NVIDIA
@@ -5374,7 +5578,7 @@ function SettingsPage({
             <strong>{t("settings.row.automaticSource")}</strong>
             <small>Uses Nuvio's MANUAL, FIRST_STREAM, or REGEX_MATCH value.</small>
           </span>
-          <select
+          <Select
             value={settings.player.autoPlayMode}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5389,7 +5593,7 @@ function SettingsPage({
             <option value="MANUAL">Choose manually</option>
             <option value="FIRST_STREAM">First stream</option>
             <option value="REGEX_MATCH">Regex match</option>
-          </select>
+          </Select>
         </label>
         {settings.player.autoPlayMode === "REGEX_MATCH" && (
           <label className="setting-text-row">
@@ -5499,7 +5703,7 @@ function SettingsPage({
             <strong>{t("settings.row.preferredAudio")}</strong>
             <small>Applied to browser and HLS audio tracks when available.</small>
           </span>
-          <select
+          <Select
             value={settings.player.preferredAudioLanguage}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5516,14 +5720,14 @@ function SettingsPage({
             {LANGUAGE_OPTIONS.map(([value, label]) => (
               <option key={value} value={value}>{label}</option>
             ))}
-          </select>
+          </Select>
         </label>
         <label className="setting-select-row">
           <span>
             <strong>{t("settings.row.fallbackAudio")}</strong>
             <small>{t("language.fallbackHint")}</small>
           </span>
-          <select
+          <Select
             value={settings.player.secondaryPreferredAudioLanguage}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5540,14 +5744,14 @@ function SettingsPage({
             {LANGUAGE_OPTIONS.map(([value, label]) => (
               <option key={value} value={value}>{label}</option>
             ))}
-          </select>
+          </Select>
         </label>
         <label className="setting-select-row">
           <span>
             <strong>{t("settings.row.preferredSubtitles")}</strong>
             <small>Selects matching embedded browser tracks when present.</small>
           </span>
-          <select
+          <Select
             value={settings.player.preferredSubtitleLanguage}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5565,14 +5769,14 @@ function SettingsPage({
             {LANGUAGE_OPTIONS.map(([value, label]) => (
               <option key={value} value={value}>{label}</option>
             ))}
-          </select>
+          </Select>
         </label>
         <label className="setting-select-row">
           <span>
             <strong>{t("settings.row.fallbackSubtitles")}</strong>
             <small>{t("language.fallbackHint")}</small>
           </span>
-          <select
+          <Select
             value={settings.player.secondaryPreferredSubtitleLanguage}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5589,7 +5793,7 @@ function SettingsPage({
             {LANGUAGE_OPTIONS.map(([value, label]) => (
               <option key={value} value={value}>{label}</option>
             ))}
-          </select>
+          </Select>
         </label>
         <SettingToggle
           title={t("toggle.useForcedSubtitles.title")}
@@ -5737,7 +5941,7 @@ function SettingsPage({
               {settings.streamBadges.filters.length === 1 ? "" : "s"} loaded.
             </small>
           </span>
-          <select
+          <Select
             value={settings.streamBadges.placement}
             disabled={!settingsReady}
             onChange={(event) =>
@@ -5751,7 +5955,7 @@ function SettingsPage({
           >
             <option value="TOP">Above details</option>
             <option value="BOTTOM">Below details</option>
-          </select>
+          </Select>
         </label>
       </div>
       {/* Only where there is a folder to name. A browser downloads through the

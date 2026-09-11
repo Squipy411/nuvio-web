@@ -4,6 +4,7 @@ import { platform } from "../platform/index.ts";
 import { audioIsSilent } from "./playback.ts";
 import { browserCapabilities, companionRequest, readCompanionPreferences, setPlaybackDiagnostics, stopCompanion } from "./companionClient.ts";
 import type { CompanionPlayback, PlaybackMode } from "./companionPolicy.ts";
+import { CompanionHttpError, isHlsSource, isTransientCompanionError, shouldEscalateStall } from "./companionTransport.ts";
 
 type Callbacks = {
   unavailable?(): void;
@@ -48,6 +49,15 @@ export class CompanionPlayer {
   private attaching = false;
   private wantsPlayback = true;
   private seekQueue: Promise<void> = Promise.resolve();
+  private hasPlayed = false;
+  private transportInspected = false;
+  private transportRetries = 0;
+  private heartbeatFailures = 0;
+  private heartbeatFlight = false;
+  private attachment = 0;
+  private changeFlight = false;
+  private steadyFrom = 0;
+  private steadyPosition = 0;
   constructor(element: HTMLVideoElement, stream: Stream, start: number, language: string, callbacks: Callbacks) {
     this.element = element; this.stream = stream; this.resume = start; this.audioLanguage = language; this.callbacks = callbacks;
   }
@@ -56,32 +66,36 @@ export class CompanionPlayer {
   setPlaybackIntent(playing: boolean) { this.wantsPlayback = playing; }
   private updateDiagnostics() {
     const end = this.element.buffered.length ? this.element.buffered.end(this.element.buffered.length - 1) : this.element.currentTime;
-    setPlaybackDiagnostics({ browser: navigator.userAgent, pwa: matchMedia("(display-mode: standalone)").matches, capabilities: this.caps, mode: this.mode, startupMs: this.startupMs, source: this.session?.probe, speed: this.session?.speed, bufferSeconds: Math.max(0, end - this.element.currentTime), lastError: this.lastError });
+    const quality = this.element.getVideoPlaybackQuality?.();
+    setPlaybackDiagnostics({ browser: navigator.userAgent, pwa: matchMedia("(display-mode: standalone)").matches, capabilities: this.caps, mode: this.mode, preferences: this.preferences, startupMs: this.startupMs, source: this.session?.probe, speed: this.session?.speed, bufferSeconds: Math.max(0, end - this.element.currentTime), decodedFrames: quality?.totalVideoFrames, droppedFrames: quality?.droppedVideoFrames, lastError: this.lastError });
   }
   async start() {
     const element = this.element;
     const listen = (name: string, handler: () => void) => element.addEventListener(name, handler, { signal: this.controller.signal });
-    listen("error", () => void this.fallback());
-    listen("playing", () => { clearTimeout(this.timer); this.attaching = false; this.pendingPosition = null; this.startupMs ??= Math.round(performance.now() - this.startedAt); if (!this.wantsPlayback) element.pause(); this.callbacks.state({ waiting: false, playing: this.wantsPlayback, error: "" }); this.updateDiagnostics(); });
-    listen("pause", () => { if (!this.changing && !this.attaching) { this.wantsPlayback = false; this.callbacks.state({ playing: false }); void this.ping(); } });
+    listen("error", () => void this.fallback(element.error?.code === 2 ? "network" : "unsupported"));
+    listen("playing", () => { clearTimeout(this.timer); this.hasPlayed = true; this.steadyFrom = performance.now(); this.steadyPosition = this.currentTime; this.attaching = false; this.pendingPosition = null; this.startupMs ??= Math.round(performance.now() - this.startedAt); if (!this.wantsPlayback) element.pause(); this.callbacks.state({ waiting: false, playing: this.wantsPlayback, error: "" }); this.updateDiagnostics(); });
+    listen("pause", () => { if (!this.changing && !this.attaching) { clearTimeout(this.timer); this.wantsPlayback = false; this.callbacks.state({ playing: false, waiting: false }); void this.ping(); } });
     listen("play", () => { if (!this.changing && !this.attaching) { this.wantsPlayback = true; void this.ping(); } });
-    listen("waiting", () => { this.callbacks.state({ waiting: true }); this.armTimeout(15_000); });
+    listen("waiting", () => { if (this.wantsPlayback) { this.callbacks.state({ waiting: true }); this.armTimeout(20_000); } });
     listen("ended", () => this.callbacks.state({ playing: false, waiting: false }));
-    listen("timeupdate", () => { this.callbacks.time(this.currentTime, this.duration); this.updateDiagnostics(); });
+    listen("timeupdate", () => {
+      if (!element.paused && performance.now() - this.steadyFrom > 30_000 && this.currentTime - this.steadyPosition > 15) this.transportRetries = 0;
+      this.callbacks.time(this.currentTime, this.duration); this.updateDiagnostics();
+    });
     listen("durationchange", () => this.callbacks.time(this.currentTime, this.duration));
     listen("loadedmetadata", () => {
-      if (this.resume > 0 && !this.session) { element.currentTime = this.resume; this.resume = 0; }
+      if (this.resume > 0 && (!this.session || this.session.mode === "relay")) { element.currentTime = this.resume; this.resume = 0; }
       this.syncNativeTracks();
     });
     const hide = () => this.stop();
     window.addEventListener("pagehide", hide, { signal: this.controller.signal });
     this.silentWatch = setInterval(() => {
-      if (!element.paused && element.currentTime > 2 && audioIsSilent(element)) void this.fallback();
+      if (!element.paused && element.currentTime > 2 && (!this.session || this.session.probe.audio.length > 0) && audioIsSilent(element)) void this.fallback();
     }, 2500);
     if (!this.stream.url) { this.finalError("This source has no HTTP video link. Use an external player."); return; }
     if (Object.keys(this.stream.behaviorHints?.proxyHeaders?.request ?? {}).length || this.preferences.mode === "compatibility" || location.protocol === "https:" && this.stream.url.startsWith("http:")) await this.fallback();
     else {
-      await this.attach(this.stream.url, /\.m3u8(?:[?#]|$)/i.test(this.stream.url));
+      await this.attach(this.stream.url, isHlsSource(this.stream.url, this.stream.behaviorHints?.filename));
       // Matroska with unsupported audio can appear to play silently. Inspect it after the direct attempt.
       const text = `${this.stream.url} ${this.stream.behaviorHints?.filename ?? ""} ${this.stream.title}`;
       if (/\.mkv\b|dts|truehd|e-?ac-?3/i.test(text) && this.preferences.mode !== "direct") {
@@ -93,67 +107,116 @@ export class CompanionPlayer {
       }
     }
   }
-  private armTimeout(ms = 12_000) { clearTimeout(this.timer); this.timer = setTimeout(() => void this.fallback(), ms); }
-  private async attach(url: string, hls: boolean) {
-    if (this.stopped) return;
+  private armTimeout(ms = 12_000) { clearTimeout(this.timer); this.timer = setTimeout(() => { if (this.wantsPlayback) void this.fallback("stall"); }, ms); }
+  private async attach(url: string, hls: boolean, startAt?: number) {
+    if (this.stopped || this.failed) return;
+    const attachment = ++this.attachment;
     this.attachedUrl = url; this.attachedHls = hls;
     this.attaching = true;
     this.changing = true; this.hls?.destroy(); this.hls = null;
+    // The JSX autoplay attribute otherwise restarts MSE as soon as a paused
+    // seek appends its first fragment. Only the explicit playback intent owns
+    // play() here; loading a new source must never turn a pause into a play.
+    this.element.autoplay = false;
     this.element.pause(); this.element.removeAttribute("src"); this.element.load();
     this.callbacks.state({ waiting: true, error: "", mode: this.mode }); this.armTimeout(this.session ? 25_000 : 12_000);
     if (hls && (!this.caps.nativeHls || this.forceMse)) {
       const { default: HlsClass } = await import("hls.js");
-      if (this.stopped) return;
+      if (this.stopped || this.failed || attachment !== this.attachment) return;
       if (!HlsClass.isSupported()) { this.finalError("This browser does not support HLS playback. Use a browser with HLS or Media Source support."); return; }
-      const player = new HlsClass({ enableWorker: true, lowLatencyMode: false, maxBufferLength: 20, maxMaxBufferLength: 40, startPosition: this.session ? 0 : this.resume, liveSyncDurationCount: 1 });
+      const player = new HlsClass({ enableWorker: true, lowLatencyMode: false, maxBufferLength: 30, maxMaxBufferLength: 60, maxBufferSize: 64 * 1024 * 1024, backBufferLength: 30, startPosition: startAt ?? (this.session && this.session.mode !== "relay" ? 0 : this.resume), liveSyncDurationCount: 3 });
       this.hls = player;
       let retries = 0;
       player.on(HlsClass.Events.ERROR, (_event, data) => {
-        if (!data.fatal || this.stopped) return;
+        if (!data.fatal || this.stopped || this.failed || attachment !== this.attachment) return;
         if (retries++ < 1 && data.type === HlsClass.ErrorTypes.MEDIA_ERROR) player.recoverMediaError();
-        else void this.fallback();
+        else void this.fallback(data.type === HlsClass.ErrorTypes.NETWORK_ERROR ? "network" : "unsupported");
       });
       player.on(HlsClass.Events.AUDIO_TRACKS_UPDATED, () => {
         if (!this.session || this.session.mode === "relay") this.callbacks.audio(player.audioTracks.map((t, id) => ({ id, label: t.name || t.lang || `Audio ${id + 1}` })), player.audioTrack);
       });
       player.on(HlsClass.Events.AUDIO_TRACK_SWITCHED, (_event, data) => { if (!this.session || this.session.mode === "relay") this.callbacks.audio(player.audioTracks.map((t, id) => ({ id, label: t.name || t.lang || `Audio ${id + 1}` })), data.id); });
       player.on(HlsClass.Events.SUBTITLE_TRACKS_UPDATED, () => this.publishSubtitles(player.subtitleTrack));
-      player.on(HlsClass.Events.MANIFEST_PARSED, () => { this.changing = false; void this.element.play().catch(() => { this.attaching = false; clearTimeout(this.timer); this.callbacks.state({ playing: false, waiting: false }); void this.ping(); }); });
+      player.on(HlsClass.Events.MANIFEST_PARSED, () => {
+        if (this.stopped || this.failed || attachment !== this.attachment) return;
+        this.changing = false;
+        if (!this.wantsPlayback) { this.attaching = false; clearTimeout(this.timer); this.callbacks.state({ playing: false, waiting: false }); void this.ping(); return; }
+        void this.element.play().catch((error: unknown) => {
+          if (this.stopped || this.failed || attachment !== this.attachment) return;
+          if (error instanceof DOMException && error.name === "NotAllowedError") { this.wantsPlayback = false; this.attaching = false; clearTimeout(this.timer); this.callbacks.state({ playing: false, waiting: false }); void this.ping(); }
+          else if (!(error instanceof DOMException && error.name === "AbortError")) void this.fallback();
+        });
+      });
       player.attachMedia(this.element); player.loadSource(url);
     } else {
       if (!this.session) this.mode = hls ? "native-hls" : "direct";
       this.element.src = url; this.element.load(); this.changing = false;
+      if (!this.wantsPlayback) { this.attaching = false; clearTimeout(this.timer); this.callbacks.state({ playing: false, waiting: false }); void this.ping(); return; }
       void this.element.play().catch((error: unknown) => {
-        if (error instanceof DOMException && error.name === "NotAllowedError") { this.attaching = false; clearTimeout(this.timer); this.callbacks.state({ playing: false, waiting: false }); void this.ping(); }
-        else if (!this.stopped && !this.changing) void this.fallback();
+        if (this.stopped || this.failed || attachment !== this.attachment) return;
+        if (error instanceof DOMException && error.name === "NotAllowedError") { this.wantsPlayback = false; this.attaching = false; clearTimeout(this.timer); this.callbacks.state({ playing: false, waiting: false }); void this.ping(); }
+        else if (!(error instanceof DOMException && error.name === "AbortError") && !this.changing) void this.fallback();
       });
     }
     if (hls && (!this.caps.nativeHls || this.forceMse) && !this.session) this.mode = "hls-js";
     this.callbacks.state({ mode: this.mode }); this.updateDiagnostics();
   }
-  private async fallback() {
-    if (this.stopped || this.failed || this.falling) return;
+  private async fallback(reason: "unsupported" | "stall" | "network" = "unsupported") {
+    if (this.stopped || this.failed || this.falling || this.changeFlight) return;
     this.falling = true; clearTimeout(this.timer); clearTimeout(this.audioTimer);
-    const position = Math.max(this.currentTime, this.resume);
+    const position = this.hasPlayed ? this.currentTime : Math.max(this.currentTime, this.resume);
     this.callbacks.state({ waiting: true, error: "" });
     try {
+      if (reason !== "unsupported" && (this.session && ![3, 4].includes(this.element.error?.code ?? 0) || !shouldEscalateStall(this.hasPlayed, this.element.error?.code))) {
+        // A stream that already decoded is not an incompatible codec. Retry its
+        // transport once at the saved position, without climbing the encode ladder.
+        if (this.transportRetries++ >= 1) {
+          this.finalError("This source is not delivering video fast enough. Try a smaller cached source, or compare playback on your home network.");
+          return;
+        }
+        if (this.session && this.session.mode !== "relay") {
+          const value = await companionRequest<CompanionPlayback>(`/sessions/${this.session.id}/change`, { position }, this.controller.signal);
+          if (this.stopped || this.failed) return;
+          this.session = value; this.pendingPosition = position;
+          await this.attach(value.url, true);
+        } else {
+          this.resume = position; this.pendingPosition = position;
+          await this.attach(this.attachedUrl, this.attachedHls);
+        }
+        return;
+      }
+      // Addon links often redirect to an extensionless playlist. Inspect only
+      // after a failed native attempt; working direct files cost no extra fetch.
+      if (!this.session && !this.attachedHls && !this.transportInspected && this.attachedUrl) {
+        this.transportInspected = true;
+        const controller = new AbortController();
+        try {
+          const response = await fetch(this.attachedUrl, { headers: { Range: "bytes=0-1023" }, signal: AbortSignal.any([controller.signal, this.controller.signal, AbortSignal.timeout(4000)]) });
+          const hls = response.ok && isHlsSource(response.url, this.stream.behaviorHints?.filename, response.headers.get("content-type") ?? "");
+          await response.body?.cancel();
+          if (hls) { this.resume = position; await this.attach(this.attachedUrl, true); return; }
+        } catch { /* Cross-origin providers are handled by the authenticated relay. */ }
+        finally { controller.abort(); }
+      }
       // Some browsers advertise native HLS but reject an fMP4 stream they can decode via MSE.
       // Try the other browser transport before spending CPU on another conversion.
       if (this.attachedHls && this.caps.nativeHls && this.caps.mse && !this.forceMse) {
         this.forceMse = true;
-        await this.attach(this.attachedUrl, true);
+        this.pendingPosition = position;
+        this.resume = !this.session || this.session.mode === "relay" ? position : 0;
+        await this.attach(this.attachedUrl, true, Math.max(0, position - (this.session?.offset ?? 0)));
         return;
       }
       const value = this.session
         ? await companionRequest<CompanionPlayback>(`/sessions/${this.session.id}/change`, { position, recover: true }, this.controller.signal)
         : await companionRequest<CompanionPlayback>("/sessions", { url: this.stream.url, headers: this.stream.behaviorHints?.proxyHeaders?.request, capabilities: this.caps, preferences: this.preferences, position, preferredAudio: this.audioLanguage, previous: [this.mode] }, this.controller.signal);
-      if (this.stopped) { stopCompanion(value.id); return; }
+      if (this.stopped || this.failed) { stopCompanion(value.id); return; }
       this.session = value; this.mode = value.mode; this.pendingPosition = position;
       this.resume = value.mode === "relay" ? position : 0;
       await this.attach(value.url, value.mode !== "relay" || /hls/.test(value.probe.container));
-      if (value.mode === "relay" && position > 0) this.element.addEventListener("loadedmetadata", () => { this.element.currentTime = position; }, { once: true, signal: this.controller.signal });
       this.syncCompanionAudio();
-      this.heartbeat ??= setInterval(() => void this.ping(), 20_000);
+      this.heartbeat ??= setInterval(() => void this.ping(), 10_000);
+      void this.ping();
     } catch (error) {
       if (!this.stopped) {
         const message = error instanceof Error ? error.message : "The companion could not prepare this source.";
@@ -164,14 +227,26 @@ export class CompanionPlayer {
     finally { this.falling = false; }
   }
   private async ping() {
-    if (!this.session || this.stopped || this.failed || this.changing) return;
+    if (!this.session || this.stopped || this.failed || this.changing || this.heartbeatFlight) return;
+    this.heartbeatFlight = true;
     try {
       const generation = this.session.generation;
       const value = await companionRequest<CompanionPlayback>(`/sessions/${this.session.id}/heartbeat`, { paused: !this.wantsPlayback, generation }, this.controller.signal);
       if (this.stopped || generation !== this.session?.generation) return;
+      this.heartbeatFailures = 0;
       this.session = value;
-      this.updateDiagnostics(); if (this.session.error) await this.fallback();
-    } catch (error) { if (!this.stopped) this.finalError(error instanceof Error ? error.message : "The companion disconnected."); }
+      this.updateDiagnostics(); if (this.session.error) await this.fallback(this.session.errorKind === "source" ? "network" : "unsupported");
+    } catch (error) {
+      if (this.stopped) return;
+      if (isTransientCompanionError(error) && ++this.heartbeatFailures <= 3) {
+        this.lastError = "The playback connection briefly dropped; reconnecting.";
+        this.updateDiagnostics();
+        return;
+      }
+      if (error instanceof CompanionHttpError && error.status === 404) {
+        this.finalError("The playback session expired or the companion restarted. Choose the source again to resume.");
+      } else this.finalError(error instanceof Error ? error.message : "The companion disconnected.");
+    } finally { this.heartbeatFlight = false; }
   }
   private syncCompanionAudio() {
     if (!this.session || this.session.mode === "relay" && /hls/.test(this.session.probe.container)) return;
@@ -179,7 +254,7 @@ export class CompanionPlayer {
   }
   private syncNativeTracks() {
     const element = this.element as HTMLVideoElement & { audioTracks?: ArrayLike<{ label?: string; language?: string; enabled: boolean }> };
-    if (element.audioTracks?.length && (!this.session || this.session.mode === "relay")) {
+    if (element.audioTracks?.length && (!this.session || this.session.mode === "relay" && /hls/.test(this.session.probe.container))) {
       const tracks = Array.from(element.audioTracks);
       this.callbacks.audio(tracks.map((t, id) => ({ id, label: t.label || t.language || `Audio ${id + 1}` })), tracks.findIndex((t) => t.enabled));
     }
@@ -193,20 +268,23 @@ export class CompanionPlayer {
   }
   private async seekNow(position: number, audioIndex?: number) {
     const deadline = Date.now() + 30_000;
-    while (this.changing && !this.stopped && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
-    if (this.stopped) return;
-    if (this.changing) { this.finalError("The playback change timed out. Choose the source again."); return; }
+    while ((this.changing || this.falling) && !this.stopped && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+    if (this.stopped || this.failed) return;
+    if (this.changing || this.falling) { this.finalError("The playback change timed out. Choose the source again."); return; }
     const target = Math.max(0, Math.min(position, this.duration ? this.duration - 0.1 : position));
-    if (!this.session || this.session.mode === "relay" && audioIndex === undefined) { this.element.currentTime = target; return; }
-    this.changing = true;
+    if (!this.session || this.session.mode === "relay" && audioIndex === undefined) { this.element.currentTime = target; this.callbacks.time(target, this.duration); return; }
+    this.changing = true; this.changeFlight = true;
     this.callbacks.state({ waiting: true }); this.pendingPosition = target;
+    // Native HLS may defer metadata/timeupdate until Play when paused. The
+    // scrubber and caption clock still need the requested original position now.
+    this.callbacks.time(target, this.duration);
     try {
       const value = await companionRequest<CompanionPlayback>(`/sessions/${this.session.id}/change`, { position: target, audioIndex }, this.controller.signal);
-      if (this.stopped) return;
+      if (this.stopped || this.failed) return;
       this.session = value; this.mode = value.mode;
       await this.attach(value.url, true); this.syncCompanionAudio();
     } catch (error) { if (!this.stopped) this.finalError(error instanceof Error ? error.message : "Seeking failed."); }
-    finally { this.changing = false; }
+    finally { this.changing = false; this.changeFlight = false; }
   }
   async selectAudio(id: number) {
     if (this.session && !/hls/.test(this.session.probe.container) || this.session && this.session.mode !== "relay") { await this.seek(this.currentTime, id); return; }
@@ -260,13 +338,14 @@ export class CompanionPlayer {
     this.callbacks.subtitles([...hls, ...this.subtitleSources.map((t, i) => ({ id: 1000 + i, lang: t.lang, label: t.label || t.lang }))], selected);
   }
   private finalError(message: string) {
-    this.failed = true; clearTimeout(this.timer); clearTimeout(this.audioTimer); clearInterval(this.heartbeat); clearInterval(this.silentWatch); this.lastError = message; this.callbacks.state({ error: message, waiting: false, playing: false }); this.updateDiagnostics();
+    if (this.failed || this.stopped) return;
+    this.failed = true; this.attachment++; this.controller.abort(); clearTimeout(this.timer); clearTimeout(this.audioTimer); clearInterval(this.heartbeat); clearInterval(this.silentWatch); this.lastError = message; this.callbacks.state({ error: message, waiting: false, playing: false }); this.updateDiagnostics();
     if (this.session) stopCompanion(this.session.id);
     this.hls?.stopLoad(); this.element.pause();
   }
   stop() {
     if (this.stopped) return;
-    this.stopped = true; this.controller.abort(); clearTimeout(this.timer); clearTimeout(this.audioTimer); clearInterval(this.heartbeat); clearInterval(this.silentWatch);
+    this.stopped = true; this.attachment++; this.controller.abort(); clearTimeout(this.timer); clearTimeout(this.audioTimer); clearInterval(this.heartbeat); clearInterval(this.silentWatch);
     this.hls?.destroy(); if (this.session) stopCompanion(this.session.id);
     for (const url of this.trackUrls) URL.revokeObjectURL(url);
     for (const track of this.subtitleTracks.values()) track.remove();

@@ -20,7 +20,9 @@ type Session = {
   resources: HlsResources; secret: string; directory: string; generation: number;
   mode: PlaybackMode; attempted: PlaybackMode[]; audioIndex: number; offset: number;
   heartbeat: number; created: number; speed?: number; error?: string; child?: ChildProcess;
+  errorKind?: CompanionPlayback["errorKind"]; sourceReadFailed?: boolean;
   controller: AbortController; changing: boolean; disposed: boolean; paused?: boolean;
+  transport?: Pick<MediaProbe, "seekable" | "acceptRanges" | "contentType" | "contentLength">;
 };
 type CreateInput = { url: string; headers?: Record<string, string>; capabilities: BrowserCapabilities; preferences: PlaybackPreferences; position: number; preferredAudio?: string; previous?: PlaybackMode[] };
 type NetResponse = Awaited<ReturnType<typeof safeRequest>>;
@@ -57,7 +59,7 @@ export class PlaybackSessions {
   }
   view(session: Session): CompanionPlayback {
     return { id: session.id, mode: session.mode, generation: session.generation, offset: session.offset, probe: session.probe,
-      audioIndex: session.audioIndex, speed: session.speed, error: session.error,
+      audioIndex: session.audioIndex, speed: session.speed, error: session.error, errorKind: session.errorKind,
       url: session.mode === "relay" ? `/api/companion/sessions/${session.id}/media/root` : `/api/companion/sessions/${session.id}/hls/${session.generation}/index.m3u8` };
   }
   async create(owner: string, input: CreateInput, signal: AbortSignal) {
@@ -79,12 +81,10 @@ export class PlaybackSessions {
       if (cached && cached.until > Date.now()) session.probe = structuredClone(cached.probe);
       else {
         session.probe = await probeMedia(`${this.internalBase}/${session.secret}/${id}/root`, session.controller.signal);
-        const response = await this.network(session.upstream, { headers: { ...session.headers, range: "bytes=0-1023" }, signal: session.controller.signal });
-        session.probe.acceptRanges = String(response.response.headers["accept-ranges"] ?? "unknown");
-        session.probe.seekable = response.response.statusCode === 206 || session.probe.acceptRanges === "bytes";
-        session.probe.contentType = String(response.response.headers["content-type"] ?? "").slice(0, 100);
-        session.probe.contentLength = Number(response.response.headers["content-range"]?.split("/")[1] ?? response.response.headers["content-length"]) || undefined;
-        response.response.destroy();
+        // ffprobe already reads this URL through the authenticated reader. Reuse
+        // that response's metadata instead of doing another CDN/redirect round trip.
+        if (session.transport) Object.assign(session.probe, session.transport);
+        if (/hls/.test(session.probe.container)) session.probe.seekable = true;
         if (this.cache.size >= 64) this.cache.delete(this.cache.keys().next().value!);
         this.cache.set(key, { probe: structuredClone(session.probe), until: Date.now() + 5 * 60_000 });
       }
@@ -113,12 +113,23 @@ export class PlaybackSessions {
       if (session.generation) await rm(session.directory, { recursive: true, force: true });
       await mkdir(session.directory, { recursive: true, mode: 0o700 });
       if (session.disposed) { await rm(session.directory, { recursive: true, force: true }); throw new HttpError(404, "Playback has stopped."); }
-      session.generation++; session.error = undefined; session.speed = undefined;
+      session.generation++; session.error = undefined; session.errorKind = undefined;
+      session.sourceReadFailed = false; session.speed = undefined;
       session.offset = Math.min(Math.max(0, position), session.probe.duration > 0 ? Math.max(0, session.probe.duration - 1) : position);
       session.heartbeat = Date.now();
       const generation = session.generation;
       const args = ffmpegArguments({ url: `${this.internalBase}/${session.secret}/${session.id}/root`, directory: session.directory, mode: session.mode, position: session.offset, audioIndex: session.audioIndex, probe: session.probe, resolution: session.preferences.resolution });
-      session.child = startFfmpeg(args, { speed: (value) => { if (session.generation === generation) session.speed = value; }, failed: () => { if (!session.disposed && session.generation === generation) session.error = "The conversion stopped. Try the next compatibility mode or another source."; } });
+      session.child = startFfmpeg(args, {
+        speed: (value) => { if (session.generation === generation) session.speed = value; },
+        failed: () => {
+          if (!session.disposed && session.generation === generation) {
+            session.errorKind = session.sourceReadFailed ? "source" : "conversion";
+            session.error = session.sourceReadFailed
+              ? "The source connection stopped delivering media. Try reconnecting or select a fresh source."
+              : "The conversion stopped. Try the next compatibility mode or another source.";
+          }
+        },
+      });
       session.paused = false;
       safeLog("ffmpeg.start", { session: session.id, mode: session.mode, generation, position: session.offset });
     } finally { session.changing = false; }
@@ -161,19 +172,46 @@ export class PlaybackSessions {
     const controller = new AbortController();
     const abort = () => controller.abort();
     response.once("close", abort);
+    const generation = session.generation;
+    const markSourceFailure = () => {
+      // A consumer closing ffprobe/FFmpeg's read is normal, particularly on
+      // seek and cancellation. Only a live generation's upstream failure
+      // justifies retrying transport instead of selecting another codec.
+      if (internal && generation > 0 && generation === session.generation &&
+          !session.disposed && !session.changing && !controller.signal.aborted &&
+          !session.controller.signal.aborted) session.sourceReadFailed = true;
+    };
     let upstream: NetResponse | undefined;
     try {
       const headers = { ...session.headers };
       if (new URL(url).origin !== new URL(session.upstream).origin) { delete headers.authorization; delete headers.cookie; }
       if (range) headers.range = range;
       if (request.headers["if-range"]) headers["if-range"] = String(request.headers["if-range"]);
-      upstream = await this.network(url, { headers, method: request.method === "HEAD" ? "HEAD" : "GET", signal: AbortSignal.any([controller.signal, session.controller.signal]) });
+      upstream = await this.network(url, {
+        headers, method: request.method === "HEAD" ? "HEAD" : "GET",
+        signal: AbortSignal.any([controller.signal, session.controller.signal]),
+        // Report an upstream stall before FFmpeg's 15s reader deadline. If
+        // FFmpeg gives up first it is indistinguishable from a normal cancel.
+        timeoutMs: internal && generation > 0 ? 12_000 : undefined,
+      });
       const incoming = upstream.response;
       if ((incoming.statusCode ?? 500) >= 400) {
+        markSourceFailure();
         response.writeHead(incoming.statusCode ?? 502, { ...(incoming.headers["content-range"] ? { "content-range": incoming.headers["content-range"] } : {}) }); response.end(); return;
       }
+      if (internal && resource === "root") {
+        const acceptRanges = String(incoming.headers["accept-ranges"] ?? "unknown");
+        session.transport = {
+          acceptRanges, seekable: incoming.statusCode === 206 || acceptRanges.toLowerCase() === "bytes",
+          contentType: String(incoming.headers["content-type"] ?? "").slice(0, 100),
+          contentLength: Number(incoming.headers["content-range"]?.split("/")[1] ?? incoming.headers["content-length"]) || undefined,
+        };
+      }
       const type = String(incoming.headers["content-type"] ?? "application/octet-stream");
-      if (/mpegurl/i.test(type) || /\.m3u8(?:\?|$)/i.test(url)) {
+      if (/mpegurl/i.test(type) || /\.m3u8$/i.test(upstream.url.pathname) || /\.m3u8(?:\?|$)/i.test(url) || resource === "root" && /hls/.test(session.probe.container)) {
+        if (request.method === "HEAD") {
+          response.writeHead(200, { "content-type": "application/vnd.apple.mpegurl", "cache-control": "no-store" }); response.end(); return;
+        }
         const text = (await readLimited(incoming, 2 * 1024 * 1024)).toString();
         session.resources.prune();
         const children = new Set<string>();
@@ -188,7 +226,11 @@ export class PlaybackSessions {
       const output: Record<string, string | number> = { "content-type": /^(?:video|audio)\/|^application\/(?:octet-stream|mp4|vnd\.apple\.mpegurl|x-mpegurl)/i.test(type) ? type : "application/octet-stream", "cache-control": "no-store", "x-content-type-options": "nosniff" };
       for (const name of ["content-length", "content-range", "accept-ranges", "etag", "last-modified"]) if (incoming.headers[name] !== undefined) output[name] = String(incoming.headers[name]);
       response.writeHead(incoming.statusCode ?? 200, output);
+      incoming.once("aborted", markSourceFailure);
       await pipeline(incoming, response);
+    } catch (error) {
+      markSourceFailure();
+      throw error;
     } finally { response.removeListener("close", abort); upstream?.response.destroy(); }
   }
   async segment(request: IncomingMessage, response: ServerResponse, session: Session, generation: number, name: string) {

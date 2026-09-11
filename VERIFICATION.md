@@ -1,4 +1,44 @@
-# Verification record — 2026-09-05
+# Verification record
+
+## 2026-09-10 update — local verification
+
+Merged original `lucaboox/nuvio-web` through
+`a16757a2c1785d93ce824b220e8aa54ae71fe71b`, preserving the personal companion.
+The old experimental website remains separate and was not used as the base.
+
+| Check | Current update result |
+| --- | --- |
+| Frontend and companion TypeScript | Passed |
+| Frontend regression tests | 361 passed, 0 failed |
+| Real FFmpeg 6.1.1 companion tests | 45 passed, 0 skipped |
+| Real Chrome playback | 17 scenarios passed, actual decoded frames and advancing time |
+| Production browser | 3 passed: offline/private cache boundary, plain-LAN auth worker, real two-tab update/cache retirement |
+| Proxy authentication | Exact HTTPS origin/Host, spoof rejection, cookie/CSRF renewal and account switch regressions passed |
+| Visual check | 390px player and 1440px settings inspected; no viewport overflow |
+| Impeccable detector | No findings on changed player/settings components |
+| Live Zima, TorBox, Nuvio account, NPM or Cloudflare | Not exercised; deployment-side check required |
+
+Playback regression coverage now includes redirected extensionless HLS, paused
+seeks, brief 502 heartbeat recovery, 401 renewal, source switching with exactly
+one active video element, and normal-speed conversion without losing the saved
+direct-play speed. Sync tests cover account/profile isolation, ordered settings,
+addons and progress, delayed logout/sign-in races, stale 401 responses and late
+profile reads. Tests use generated media and synthetic authentication only.
+
+The production build is 580.67 kB main JS (182.61 kB gzip), with a 1,277.72 KiB PWA
+precache. It is larger than the September 5 build because this update integrates
+new upstream controls and decoder code; no overall bundle-size reduction is
+claimed. HLS and AC3 engines remain lazy. First-segment timing for a generated
+320×180 long-keyframe remux fixture improved from about 8.1 s to 0.13 s after changing
+the bounded initial read burst from 12 s to 20 s. This does not predict real TorBox,
+high-bitrate 4K, hardware-accelerated or multihour playback performance.
+
+PWA activation waits for all open tabs' player views and queued account writes,
+and for focused editing to finish. Replacing Docker containers still terminates
+ephemeral playback sessions; stop playback before applying the container update.
+An uncached optional old-build chunk cannot be guaranteed after a server upgrade.
+
+## Previous verified release — 2026-09-05
 
 ## Status
 

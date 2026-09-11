@@ -1,4 +1,5 @@
 import { t } from "../lib/i18n.ts";
+import { Select } from "./Select";
 import { ArrowLeft } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -243,7 +244,7 @@ export function CollectionFolderView({
         <div className="discover-filters">
           <label>
             <span>Catalog</span>
-            <select
+            <Select
               value={selected}
               onChange={(event) => setSelected(event.target.value)}
             >
@@ -253,7 +254,7 @@ export function CollectionFolderView({
                   {entry.label}
                 </option>
               ))}
-            </select>
+            </Select>
           </label>
         </div>
       )}
