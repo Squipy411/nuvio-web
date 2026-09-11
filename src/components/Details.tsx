@@ -1,4 +1,5 @@
 import { selectAutoStream } from "../lib/playbackPolicy";
+import { Select } from "./Select";
 import { bingeGroupFor } from "../lib/bingeCache";
 import { matchBadges } from "../lib/badgeMatcher";
 import {
@@ -11,6 +12,7 @@ import {
   RefreshCw,
   Check,
   Copy,
+  Dices,
   Download as DownloadIcon,
   Eye,
   EyeOff,
@@ -19,6 +21,9 @@ import {
   Plus,
   RotateCcw,
   Search,
+  Settings,
+  Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -36,6 +41,7 @@ import {
   type MetadataEnrichmentConfig,
 } from "../lib/metadataEnrichment";
 import { platform } from "../platform/index.ts";
+import { canPlayInApp } from "../lib/externalPlayer";
 import {
   applyDebridStreamSettings,
   type DebridRules,
@@ -61,6 +67,7 @@ import type {
 } from "../lib/metaScreenSettings";
 import { useDragScroll } from "../lib/useDragScroll";
 import { useProgressiveList } from "../lib/useProgressiveList";
+import { useVirtualList } from "../lib/useVirtualList";
 import { useLongPress } from "../lib/useLongPress";
 import { useScrollLock } from "../lib/useScrollLock";
 import { useSwipeBack } from "../lib/useSwipeBack";
@@ -311,7 +318,8 @@ function afterDetailLayout(): Promise<void> {
   });
 }
 
-function SourceBadges({
+/** Exported for the player's own source picker, which lists the same rows. */
+export function SourceBadges({
   stream,
   settings,
 }: {
@@ -736,6 +744,7 @@ export function Details({
     if (castRef.current) castRef.current.scrollLeft = 0;
   }, [season, castRef]);
   const [episodeQuery, setEpisodeQuery] = useState("");
+  const [episodeRouletteOpen, setEpisodeRouletteOpen] = useState(false);
   const visibleEpisodes = useMemo(() => {
     const query = episodeQuery.trim().toLocaleLowerCase();
     return meta.videos.filter((video) => {
@@ -749,6 +758,20 @@ export function Details({
       ].some((value) => value?.toLocaleLowerCase().includes(query));
     });
   }, [episodeQuery, meta.videos, season]);
+  const episodeResetKey = `${meta.id}:${season ?? ""}:${episodeQuery.trim().toLocaleLowerCase()}`;
+  const {
+    visible: renderedEpisodes,
+    listRef: episodeListRef,
+    beforeSize: episodesBeforeSize,
+    afterSize: episodesAfterSize,
+  } = useVirtualList(visibleEpisodes, {
+    resetKey: episodeResetKey,
+    estimateSize: 120,
+    overscan: 8,
+  });
+  useEffect(() => {
+    if (episodeListRef.current) episodeListRef.current.scrollTop = 0;
+  }, [episodeResetKey]);
   useEffect(() => {
     let live = true;
     if (
@@ -956,6 +979,12 @@ export function Details({
    */
   function playFresh(stream: Stream, video?: Video, player?: ExternalPlayerMode) {
     saveStreamLink(reuseKey(video), stream);
+    // The sheet has done its job, so it goes now rather than waiting behind the
+    // player: leaving playback used to land back on the list you had just
+    // chosen from, which is a step forward dressed as a step back. Behind the
+    // player is the page you came from — this title, or the home page you
+    // continued from.
+    closeSource();
     onPlay(stream, meta, video, player);
   }
 
@@ -1134,7 +1163,11 @@ export function Details({
           meta.background
             ? {
                 "--detail-backdrop": `url("${meta.background.replace(/"/g, "%22")}")`,
-                backgroundImage: `linear-gradient(90deg, rgba(5,7,9,.98), rgba(5,7,9,.38)), linear-gradient(0deg, ${metaScreenSettings.backgroundMode === "dominant_color" ? "rgb(var(--detail-dominant))" : metaScreenSettings.backgroundMode === "cinematic" ? "rgba(8,10,13,.2)" : "#080a0d"}, transparent 60%), url("${meta.background.replace(/"/g, "%22")}")`,
+                "--detail-fade-color": metaScreenSettings.backgroundMode === "dominant_color"
+                  ? "rgb(var(--detail-dominant))"
+                  : metaScreenSettings.backgroundMode === "cinematic"
+                    ? "rgba(8,10,13,.2)"
+                    : "#080a0d",
               } as CSSProperties
             : undefined
         }
@@ -1296,22 +1329,34 @@ export function Details({
               <span className="eyebrow">EPISODES</span>
               <h2>{meta.name}</h2>
             </div>
-            <label className="season-select-wrap">
-              <span>SEASON</span>
-              <select
-                value={season ?? ""}
-                onChange={(event) => {
-                  setSeason(Number(event.target.value));
-                  setEpisodeQuery("");
-                }}
+            <div className="episode-header-controls">
+              <label className="season-select-wrap">
+                <span>SEASON</span>
+                <Select
+                  value={season ?? ""}
+                  onChange={(event) => {
+                    setSeason(Number(event.target.value));
+                    setEpisodeQuery("");
+                  }}
+                >
+                  {seasons.map((value) => (
+                    <option key={value} value={value}>
+                      {value === 0 ? "Specials" : `Season ${value}`}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+              <button
+                type="button"
+                className="episode-random-button"
+                aria-label="Pick a random episode"
+                title="Pick a random episode"
+                disabled={!meta.videos.length}
+                onClick={() => setEpisodeRouletteOpen(true)}
               >
-                {seasons.map((value) => (
-                  <option key={value} value={value}>
-                    {value === 0 ? "Specials" : `Season ${value}`}
-                  </option>
-                ))}
-              </select>
-            </label>
+                <Dices />
+              </button>
+            </div>
           </header>
           <label className="episode-search">
             <Search size={19} />
@@ -1325,8 +1370,18 @@ export function Details({
             <strong>{season === 0 ? "Specials" : `Season ${season ?? seasons[0] ?? 1}`}</strong>
             <span>{visibleEpisodes.length} {visibleEpisodes.length === 1 ? "episode" : "episodes"}</span>
           </div>
-          <div className={`episode-list is-${metaScreenSettings.episodeCardStyle}`}>
-            {visibleEpisodes.map((video) => (
+          <div
+            ref={episodeListRef}
+            className={`episode-list is-${metaScreenSettings.episodeCardStyle}`}
+          >
+            {episodesBeforeSize > 0 && (
+              <div
+                className="episode-list-spacer"
+                style={{ height: episodesBeforeSize }}
+                aria-hidden="true"
+              />
+            )}
+            {renderedEpisodes.map((video) => (
                 <EpisodeRow
                   key={video.id}
                   video={video}
@@ -1352,7 +1407,27 @@ export function Details({
                   onMenu={(x, y) => setMenu({ x, y, video })}
                 />
               ))}
+            {episodesAfterSize > 0 && (
+              <div
+                className="episode-list-spacer"
+                style={{ height: episodesAfterSize }}
+                aria-hidden="true"
+              />
+            )}
           </div>
+          {episodeRouletteOpen && meta.videos.length > 0 && (
+            <EpisodeRoulette
+              episodes={meta.videos}
+              initialSeason={season ?? 0}
+              contentId={meta.id}
+              watchIndex={watchIndex}
+              onClose={() => setEpisodeRouletteOpen(false)}
+              onPlay={(video) => {
+                setEpisodeRouletteOpen(false);
+                sources(video);
+              }}
+            />
+          )}
         </section>
       )}
       {sectionEnabled("CAST") && castForSeason.length > 0 && (
@@ -1429,7 +1504,7 @@ export function Details({
             <h2>Trailers</h2>
             {trailerCategories.length > 0 && (
               <label className="detail-trailer-category">
-                <select
+                <Select
                   aria-label="Video category"
                   value={effectiveTrailerCategory}
                   onChange={(event) =>
@@ -1441,7 +1516,7 @@ export function Details({
                       {category} ({rows.length})
                     </option>
                   ))}
-                </select>
+                </Select>
               </label>
             )}
           </div>
@@ -1575,25 +1650,27 @@ export function Details({
                     moment you are looking at them. */}
                 {!platform.player && <label className="source-player">
                   <span>Play in</span>
-                  <select
+                  <Select
                     value={sheetPlayer}
                     onChange={(event) =>
                       onDefaultPlayer(event.target.value as ExternalPlayerMode)
                     }
                   >
-                    <option value="internal">Nuvio web player</option>
+                    {canPlayInApp() && (
+                      <option value="internal">Nuvio web player</option>
+                    )}
                     {platform.externalPlayer.options("player").map((option) => (
                       <option key={option.mode} value={option.mode}>
                         {option.label}
                         {option.reportsBack ? " ✓" : ""}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </label>}
                 {sourceAddons.length > 1 && (
                   <label className="source-player">
                     <span>{t("sources.addon")}</span>
-                    <select
+                    <Select
                       value={activeAddon}
                       onChange={(event) => setSourceAddon(event.target.value)}
                     >
@@ -1603,14 +1680,14 @@ export function Details({
                           {name}
                         </option>
                       ))}
-                    </select>
+                    </Select>
                   </label>
                 )}
               </div>
               {/* Outside the tools group so a phone can wrap the pickers onto
-                  their own row and leave the way out at the top right. */}
+                  their own row and leave the way out leading it. */}
               <button
-                className="circle-button source-sheet-back source-sheet-mobile-back"
+                className="circle-button source-sheet-back"
                 aria-label={t("sources.back")}
                 onClick={closeSource}
               >
@@ -1629,14 +1706,6 @@ export function Details({
                 onClick={() => void sources(sourceVideo ?? undefined, true)}
               >
                 <RefreshCw />
-              </button>
-              <button
-                className="circle-button source-sheet-desktop-close"
-                aria-label="Close sources"
-                title="Close sources"
-                onClick={closeSource}
-              >
-                <X />
               </button>
             </header>
             {downloadNote && <div className="sheet-note">{downloadNote}</div>}
@@ -1823,6 +1892,446 @@ export function Details({
           </section>
         </div>
       )}
+    </div>
+  );
+}
+
+const EPISODE_REEL_LENGTH = 44;
+const EPISODE_WINNER_AT = 36;
+const EPISODE_ROLL_DEFAULT_MS = 5000;
+const EPISODE_ROLL_MIN_MS = 2000;
+const EPISODE_ROLL_MAX_MS = 15000;
+
+function makeEpisodeRoll(episodes: Video[]) {
+  const pick = () => episodes[Math.floor(Math.random() * episodes.length)];
+  const winner = pick();
+  const reel = Array.from({ length: EPISODE_REEL_LENGTH }, pick);
+  reel[EPISODE_WINNER_AT] = winner;
+  return { id: Date.now(), reel, winner };
+}
+
+function episodeRouletteTick(context: AudioContext) {
+  const now = context.currentTime;
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.type = "square";
+  oscillator.frequency.setValueAtTime(1180, now);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.06, now + 0.004);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.045);
+  oscillator.connect(gain).connect(context.destination);
+  oscillator.start(now);
+  oscillator.stop(now + 0.05);
+}
+
+function episodeRouletteFanfare(context: AudioContext) {
+  const now = context.currentTime;
+  for (const [frequency, delay, level] of [
+    [523.25, 0, 0.16],
+    [783.99, 0.055, 0.13],
+    [1046.5, 0.11, 0.1],
+  ] as Array<[number, number, number]>) {
+    const at = now + delay;
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    oscillator.type = "triangle";
+    oscillator.frequency.setValueAtTime(frequency, at);
+    gain.gain.setValueAtTime(0.0001, at);
+    gain.gain.exponentialRampToValueAtTime(level, at + 0.012);
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + 1.05);
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start(at);
+    oscillator.stop(at + 1.1);
+  }
+}
+
+/** The title roulette adapted to the landscape artwork used by episodes. */
+function EpisodeRoulette({
+  episodes,
+  initialSeason,
+  contentId,
+  watchIndex,
+  onClose,
+  onPlay,
+}: {
+  episodes: Video[];
+  initialSeason: number;
+  contentId: string;
+  watchIndex: WatchIndex;
+  onClose(): void;
+  onPlay(video: Video): void;
+}) {
+  const regularSeasons = useMemo(
+    () =>
+      [...new Set(episodes.map((video) => video.season ?? 0))]
+        .filter((value) => value > 0)
+        .sort((a, b) => a - b),
+    [episodes],
+  );
+  const [scope, setScope] = useState<number | "all">(
+    initialSeason > 0 ? initialSeason : "all",
+  );
+  const [includeWatched, setIncludeWatched] = useState(
+    () => localStorage.getItem("nuvio-web-roulette-watched") !== "false",
+  );
+  const [includeSpecials, setIncludeSpecials] = useState(
+    () => localStorage.getItem("nuvio-web-episode-roulette-specials") === "true",
+  );
+  const [muted, setMuted] = useState(
+    () => localStorage.getItem("nuvio-web-roulette-muted") === "true",
+  );
+  const [rollMs, setRollMs] = useState(() => {
+    const saved = Number(localStorage.getItem("nuvio-web-roulette-ms"));
+    return Number.isFinite(saved) &&
+      saved >= EPISODE_ROLL_MIN_MS &&
+      saved <= EPISODE_ROLL_MAX_MS
+      ? saved
+      : EPISODE_ROLL_DEFAULT_MS;
+  });
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [roll, setRoll] = useState<ReturnType<typeof makeEpisodeRoll> | null>(null);
+  const [spinning, setSpinning] = useState(false);
+  const [revealed, setRevealed] = useState(false);
+  const viewport = useRef<HTMLDivElement | null>(null);
+  const track = useRef<HTMLDivElement | null>(null);
+  const settingsAnchor = useRef<HTMLDivElement | null>(null);
+  const audio = useRef<AudioContext | null>(null);
+  const unlocked = useRef(false);
+  const mutedRef = useRef(muted);
+  const rollMsRef = useRef(rollMs);
+  mutedRef.current = muted;
+  rollMsRef.current = rollMs;
+
+  const pool = useMemo(
+    () =>
+      episodes.filter((video) => {
+        const videoSeason = video.season ?? 0;
+        if (!includeSpecials && videoSeason === 0) return false;
+        if (scope !== "all" && videoSeason !== scope) return false;
+        if (!includeWatched) {
+          const key = watchKey(contentId, video.season, video.episode);
+          if (watchIndex.watched.has(key) || episodePercent(watchIndex, key) >= 90)
+            return false;
+        }
+        return true;
+      }),
+    [contentId, episodes, includeSpecials, includeWatched, scope, watchIndex],
+  );
+
+  const spin = useCallback(() => {
+    if (!pool.length) return;
+    setRevealed(false);
+    setRoll(makeEpisodeRoll(pool));
+    setSpinning(true);
+    if (!muted && !audio.current) {
+      const Constructor =
+        window.AudioContext ??
+        (window as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
+      if (Constructor) audio.current = new Constructor();
+    }
+    void audio.current?.resume?.();
+    if (audio.current && !unlocked.current) {
+      unlocked.current = true;
+      const silence = audio.current.createBufferSource();
+      silence.buffer = audio.current.createBuffer(1, 1, 22050);
+      silence.connect(audio.current.destination);
+      silence.start(0);
+    }
+  }, [muted, pool]);
+
+  useEffect(() => {
+    localStorage.setItem("nuvio-web-roulette-watched", String(includeWatched));
+  }, [includeWatched]);
+  useEffect(() => {
+    localStorage.setItem(
+      "nuvio-web-episode-roulette-specials",
+      String(includeSpecials),
+    );
+    if (!includeSpecials && scope === 0) setScope("all");
+  }, [includeSpecials, scope]);
+  useEffect(() => {
+    localStorage.setItem("nuvio-web-roulette-muted", String(muted));
+  }, [muted]);
+  useEffect(() => {
+    localStorage.setItem("nuvio-web-roulette-ms", String(rollMs));
+  }, [rollMs]);
+  useEffect(() => {
+    setRoll(null);
+    setSpinning(false);
+    setRevealed(false);
+  }, [scope, includeWatched, includeSpecials]);
+
+  useEffect(() => {
+    if (!roll) return;
+    const strip = track.current;
+    const frame = viewport.current;
+    const target = strip?.children.item(EPISODE_WINNER_AT) as HTMLElement | null;
+    if (!strip || !frame || !target) return;
+    const destination =
+      frame.clientWidth / 2 - (target.offsetLeft + target.offsetWidth / 2);
+    const first = strip.children.item(0) as HTMLElement | null;
+    const second = strip.children.item(1) as HTMLElement | null;
+    const pitch = first && second
+      ? second.offsetLeft - first.offsetLeft
+      : target.offsetWidth || 180;
+    const duration = rollMsRef.current;
+    let frameId = 0;
+    let lastCard = -1;
+    const started = performance.now();
+    const step = (now: number) => {
+      const progress = Math.min((now - started) / duration, 1);
+      const eased = 1 - (1 - progress) ** 4;
+      const offset = destination * eased;
+      strip.style.transform = `translate3d(${offset}px, 0, 0)`;
+      const card = Math.round((frame.clientWidth / 2 - offset) / pitch);
+      if (card !== lastCard) {
+        lastCard = card;
+        if (audio.current && !mutedRef.current)
+          episodeRouletteTick(audio.current);
+      }
+      if (progress < 1) frameId = window.requestAnimationFrame(step);
+      else setSpinning(false);
+    };
+    frameId = window.requestAnimationFrame(step);
+    return () => window.cancelAnimationFrame(frameId);
+  }, [roll]);
+
+  useEffect(() => {
+    if (!roll || spinning) {
+      setRevealed(false);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      setRevealed(true);
+      if (audio.current && !mutedRef.current)
+        episodeRouletteFanfare(audio.current);
+    }, 320);
+    return () => window.clearTimeout(timer);
+  }, [roll, spinning]);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const away = (event: MouseEvent) => {
+      if (!settingsAnchor.current?.contains(event.target as Node))
+        setSettingsOpen(false);
+    };
+    window.addEventListener("mousedown", away);
+    return () => window.removeEventListener("mousedown", away);
+  }, [settingsOpen]);
+
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (settingsOpen) setSettingsOpen(false);
+      else onClose();
+    };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, [onClose, settingsOpen]);
+
+  useEffect(() => () => void audio.current?.close(), []);
+
+  const winner = revealed ? roll?.winner : null;
+  const code = winner ? videoCode(winner) || "Episode" : "";
+  return (
+    <div
+      className="library-roulette-backdrop episode-roulette-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.currentTarget === event.target) onClose();
+      }}
+    >
+      <section
+        className={`library-roulette episode-roulette${spinning ? " spinning" : ""}${
+          roll && !spinning ? " finished" : ""
+        }`}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="episode-roulette-title"
+      >
+        <header>
+          <div>
+            <span>RANDOM EPISODE</span>
+            <h2 id="episode-roulette-title">What should I watch?</h2>
+          </div>
+          <button
+            type="button"
+            className="circle-button"
+            aria-label="Close"
+            title="Close"
+            onClick={onClose}
+          >
+            <X />
+          </button>
+        </header>
+        <div className="library-roulette-setup episode-roulette-setup">
+          <label className="episode-roulette-scope">
+            <span>Season</span>
+            <Select
+              value={scope}
+              disabled={spinning}
+              onChange={(event) =>
+                setScope(event.target.value === "all" ? "all" : Number(event.target.value))
+              }
+            >
+              <option value="all">All seasons</option>
+              {regularSeasons.map((value) => (
+                <option key={value} value={value}>Season {value}</option>
+              ))}
+              {includeSpecials && <option value={0}>Specials</option>}
+            </Select>
+          </label>
+          <div className="library-roulette-settings-anchor" ref={settingsAnchor}>
+            <button
+              type="button"
+              className="library-roulette-mute"
+              aria-label="Roll settings"
+              title="Roll settings"
+              aria-expanded={settingsOpen}
+              onClick={() => setSettingsOpen((value) => !value)}
+            >
+              <Settings />
+            </button>
+            {settingsOpen && (
+              <div className="library-roulette-settings" role="menu">
+                <label className="library-roulette-toggle">
+                  <span>Include watched <Eye /></span>
+                  <span className="switch">
+                    <input
+                      type="checkbox"
+                      checked={includeWatched}
+                      disabled={spinning}
+                      onChange={(event) => setIncludeWatched(event.target.checked)}
+                    />
+                    <i />
+                  </span>
+                </label>
+                <label className="library-roulette-toggle">
+                  <span>Include specials</span>
+                  <span className="switch">
+                    <input
+                      type="checkbox"
+                      checked={includeSpecials}
+                      disabled={spinning}
+                      onChange={(event) => setIncludeSpecials(event.target.checked)}
+                    />
+                    <i />
+                  </span>
+                </label>
+                <label className="library-roulette-toggle">
+                  <span>Sound {muted ? <VolumeX /> : <Volume2 />}</span>
+                  <span className="switch">
+                    <input
+                      type="checkbox"
+                      checked={!muted}
+                      onChange={(event) => setMuted(!event.target.checked)}
+                    />
+                    <i />
+                  </span>
+                </label>
+                <label>
+                  <span>
+                    Roll length
+                    <small>{(rollMs / 1000).toFixed(2)}s</small>
+                  </span>
+                  <input
+                    type="range"
+                    min={EPISODE_ROLL_MIN_MS}
+                    max={EPISODE_ROLL_MAX_MS}
+                    step={250}
+                    value={rollMs}
+                    onChange={(event) => setRollMs(Number(event.target.value))}
+                  />
+                </label>
+              </div>
+            )}
+          </div>
+        </div>
+        <div className="library-roulette-frame" ref={viewport}>
+          <i className="library-roulette-marker" aria-hidden="true" />
+          {roll ? (
+            <div className="library-roulette-track" ref={track} key={roll.id}>
+              {roll.reel.map((video, position) => (
+                <figure key={`${video.id}:${position}`}>
+                  {video.thumbnail ? (
+                    <img src={video.thumbnail} alt="" loading="eager" />
+                  ) : (
+                    <div className="library-roulette-placeholder">
+                      {video.episode ?? "?"}
+                    </div>
+                  )}
+                  <figcaption>
+                    <strong>{videoCode(video) || "Episode"}</strong>
+                    <span>{video.title}</span>
+                  </figcaption>
+                </figure>
+              ))}
+            </div>
+          ) : (
+            <div className="library-roulette-idle">
+              {pool.length
+                ? `${pool.length} episode${pool.length === 1 ? "" : "s"} in the running`
+                : "Nothing matches those settings"}
+            </div>
+          )}
+          {winner && (
+            <div className="library-roulette-reveal">
+              <figure>
+                {winner.thumbnail ? (
+                  <img src={winner.thumbnail} alt="" />
+                ) : (
+                  <div className="library-roulette-placeholder">
+                    {winner.episode ?? "?"}
+                  </div>
+                )}
+              </figure>
+              <div>
+                <small>
+                  {code}
+                  {episodeReleaseDate(winner.released)
+                    ? ` · ${episodeReleaseDate(winner.released)}`
+                    : ""}
+                </small>
+                <strong>{winner.title}</strong>
+                {winner.overview && <p>{winner.overview}</p>}
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="library-roulette-result" aria-live="polite">
+          {winner ? (
+            <>
+              <div><small>{code}</small><strong>{winner.title}</strong></div>
+              <div className="library-roulette-actions">
+                <button type="button" className="secondary" onClick={spin}>
+                  <Dices /> Roll again
+                </button>
+                <button type="button" className="primary" onClick={() => onPlay(winner)}>
+                  <Play /> Play {code}
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <span>
+                {spinning
+                  ? "Rolling…"
+                  : pool.length
+                    ? "Choose a season, then roll."
+                    : "Try including watched episodes or specials."}
+              </span>
+              {!spinning && (
+                <div className="library-roulette-actions">
+                  <button type="button" className="primary" disabled={!pool.length} onClick={spin}>
+                    <Dices /> Roll
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </section>
     </div>
   );
 }

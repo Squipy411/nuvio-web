@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 /**
  * Click-and-drag horizontal scrolling for the carousels.
@@ -12,9 +12,17 @@ const DRAG_THRESHOLD_PX = 6;
 
 export function useDragScroll<T extends HTMLElement>() {
   const ref = useRef<T>(null);
+  // Rows in details are intentionally conditional: search opens the sheet
+  // first, then the enriched cast arrives on a later render.  A mount-only
+  // effect sees an empty ref in that path and never attaches dragging.  Keep
+  // the actual element in state so the listener follows the row when it is
+  // mounted (or replaced) after the hook owner.
+  const [node, setNode] = useState<T | null>(null);
+  useLayoutEffect(() => {
+    setNode((current) => (current === ref.current ? current : ref.current));
+  });
 
   useEffect(() => {
-    const node = ref.current;
     if (!node) return;
 
     let dragging = false;
@@ -74,7 +82,7 @@ export function useDragScroll<T extends HTMLElement>() {
       node.removeEventListener("pointercancel", finish);
       node.removeEventListener("click", onClickCapture, { capture: true });
     };
-  }, []);
+  }, [node]);
 
   return ref;
 }

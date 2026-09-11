@@ -3,6 +3,23 @@
 import { describeTransfer, probeSource, statusReason } from "./sourceProbe.ts";
 import { probeDecoders, summariseDecoders } from "./decoderSupport.ts";
 import { readRetryDelay } from "./requestPolicy.ts";
+import { languageName } from "./languageName.ts";
+import { isAppleWebKit } from "./playback.ts";
+
+/**
+ * What to try when this engine cannot decode something.
+ *
+ * On Apple devices the usual cause is not that the file is unplayable — it is
+ * that WebCodecs refuses audio the platform itself decodes perfectly well
+ * through a video element, which is what the native player uses. Sending
+ * someone to another application for a file their own browser can play is the
+ * wrong advice, and it was the only advice this gave.
+ */
+function advice(): string {
+  return isAppleWebKit()
+    ? "Try the Native video player from the player menu, or an external player."
+    : "Try an external player.";
+}
 import {
   ALL_FORMATS,
   AudioBufferSink,
@@ -44,6 +61,13 @@ import {
  */
 const STAGE_TIMEOUT_MS = 30_000;
 const READ_TIMEOUT_MS = 90_000;
+/**
+ * How long the sound waits for the picture before starting without it.
+ *
+ * Long enough to cover re-opening a decoder at a keyframe; short enough that a
+ * file whose video never decodes is not silent as well as blank.
+ */
+const PICTURE_WAIT_MS = 6_000;
 
 /** Registered once per page, and only when something actually needs it. */
 let dolbyDecoder: Promise<void> | null = null;
@@ -80,7 +104,7 @@ export type MediabunnyPlayerOptions = {
   onAudioTracks?(tracks: AudioTrackChoice[], selected: number): void;
 };
 
-export type AudioTrackChoice = { id: number; label: string };
+export type AudioTrackChoice = { id: number; label: string; lang?: string };
 
 /**
  * Three-letter codes whose two-letter form is not their first two letters.
@@ -221,14 +245,31 @@ export class MediabunnyPlayer {
   private audioCodecs: (string | null)[] = [];
   private audioChannels: number[] = [];
   private audioIndex = 0;
+  /** Frames that reached the canvas, as opposed to packets that were read. */
+  private drawn = 0;
+  /** Audio exists but nothing here can decode it, so playback will be silent. */
+  private silentAudio = false;
   private videoSink: CanvasSink | null = null;
   private audioSink: AudioBufferSink | null = null;
   private context: AudioContext | null = null;
   private gain: GainNode | null = null;
+  private compressor: DynamicsCompressorNode | null = null;
 
   private stopped = false;
   private playing = false;
   private generation = 0;
+  /**
+   * The video loop's own lifetime, which a pause does not end.
+   *
+   * Pausing used to invalidate everything, so an unpause re-opened the decoder
+   * at the keyframe before the resume point — a second or two of work to
+   * arrive back at the frame already on the canvas. The loop parks instead:
+   * it holds the next frame and waits on a clock that has stopped, which costs
+   * nothing and resumes on the following frame. Only a move — a seek, a track
+   * change, a stop — actually invalidates it.
+   */
+  private videoGeneration = 0;
+  private videoRunning = false;
   private queuedNodes = new Set<AudioBufferSourceNode>();
   private frameHandle: number | null = null;
 
@@ -236,8 +277,25 @@ export class MediabunnyPlayer {
   private pausedAt = 0;
   private contextStartTime = 0;
   private startedFrom = 0;
+  /**
+   * Held from starting playback until the picture is actually back.
+   *
+   * Resuming re-opens the video decoder at the keyframe before the resume
+   * point, which on a long-GOP 4K file is a second or two of work. Audio has
+   * no such cost. The clock used to start the moment `play` was called, so the
+   * sound ran on while the canvas still held the frame it was paused on, and
+   * the picture then raced through the backlog to catch up. Now nothing counts
+   * until a frame has been drawn: the wait shows as a brief buffer rather than
+   * as a frozen film with the dialogue continuing over it.
+   */
+  private pictureReady: Promise<void> = Promise.resolve();
+  private releasePicture: (() => void) | null = null;
+  /** True from starting playback until that first frame. */
+  private priming = false;
   private volume = 1;
   private muted = false;
+  private stableVolume = false;
+  private playbackRate = 1;
 
   duration = 0;
 
@@ -263,8 +321,13 @@ export class MediabunnyPlayer {
   }
 
   get currentTime() {
-    if (!this.playing) return this.pausedAt;
-    return this.startedFrom + (this.clockTime() - this.contextStartTime);
+    // Priming counts as stopped: the clock has no origin yet, and reporting
+    // one would move the seekbar and the subtitles ahead of the picture.
+    if (!this.playing || this.priming) return this.pausedAt;
+    return (
+      this.startedFrom +
+      (this.clockTime() - this.contextStartTime) * this.playbackRate
+    );
   }
 
   private clockTime() {
@@ -473,12 +536,13 @@ export class MediabunnyPlayer {
     if (video && !this.videoTrack) trouble.push("its video");
     this.audioTrack = audio;
     if (audioTracks.length && !audio) trouble.push("its audio");
+    this.silentAudio = audioTracks.length > 0 && !audio;
 
     if (!this.videoTrack) {
       this.report(
         "error",
         trouble.length
-          ? `This browser cannot decode ${trouble.join(" or ")}. Try an external player.`
+          ? `This browser cannot decode ${trouble.join(" or ")}. ${advice()}`
           : "This file contains no video or audio track that could be read.",
       );
       this.stop();
@@ -534,7 +598,13 @@ export class MediabunnyPlayer {
     this.assertActive();
     this.context = new AudioContextClass({ sampleRate });
     this.gain = this.context.createGain();
-    this.gain.connect(this.context.destination);
+    this.compressor = this.context.createDynamicsCompressor();
+    this.compressor.threshold.value = -24;
+    this.compressor.knee.value = 18;
+    this.compressor.ratio.value = 4;
+    this.compressor.attack.value = 0.003;
+    this.compressor.release.value = 0.25;
+    this.connectAudioOutput();
     this.applyVolume();
     this.audioSink = new AudioBufferSink(this.audioTrack);
   }
@@ -573,7 +643,29 @@ export class MediabunnyPlayer {
     this.startedFrom = this.pausedAt;
     this.contextStartTime = this.clockTime();
     this.run(++this.generation);
-    this.report("ready", "");
+    // Buffering while the decoder is being opened, which is a wait with a
+    // spinner rather than a picture that has stopped for no stated reason.
+    // Where there is nothing to open — an unpause — this is already false and
+    // playback simply carries on.
+    if (this.priming) this.report("buffering", "");
+    else this.reportReady();
+  }
+
+  /**
+   * Playing, with whatever has to be said about it.
+   *
+   * Silence is said even when the video is fine. Without it the file simply
+   * played with no sound and no explanation, which reads as a broken app
+   * rather than as audio this engine cannot open — and on Apple there is
+   * another player here that can.
+   */
+  private reportReady() {
+    this.report(
+      "ready",
+      this.silentAudio
+        ? `This browser cannot decode this file's audio, so it plays silently. ${advice()}`
+        : "",
+    );
   }
 
   pause() {
@@ -595,15 +687,31 @@ export class MediabunnyPlayer {
     const wasPlaying = this.playing;
     this.playing = false;
     const generation = ++this.generation;
+    // Unlike a pause, this is a move: the loop's iterator is somewhere else
+    // entirely and has to be re-opened at the destination.
+    this.videoGeneration += 1;
+    this.videoRunning = false;
     this.silence();
     this.pausedAt = target;
     if (!keepStatus) this.report("buffering", "");
     // A still frame at the destination, so scrubbing shows where it landed
     // rather than freezing on where it left.
     if (this.videoSink) {
-      const frame = await this.videoSink.getCanvas(target);
+      /*
+       * A frame here is a courtesy, not a requirement.
+       *
+       * This draws a still at the destination so scrubbing shows where it
+       * landed. Throwing when one cannot be produced turned a cosmetic miss
+       * into the end of playback — and the first thing a resumed episode does
+       * is seek to its saved position, so the same file played or died
+       * depending on where you left off. That is what made it intermittent.
+       *
+       * The decode loop is what actually has to work, and it reports for
+       * itself. If nothing ever reaches the canvas the player says so after a
+       * few seconds; until then, playing on with no still beats stopping.
+       */
+      const frame = await this.videoSink.getCanvas(target).catch(() => null);
       if (this.stopped || this.generation !== generation) return;
-      if (!frame) throw new Error("No video frame could be decoded at this position. Try another source or an external player.");
       if (frame) this.draw(frame);
     }
     if (wasPlaying) await this.play();
@@ -629,12 +737,19 @@ export class MediabunnyPlayer {
       const channels = this.audioChannels[id];
       const parts = [
         track.name?.trim(),
-        language && language !== "und" ? language.toUpperCase() : "",
+        // Spelled out, the way every other language in the app is: a menu
+        // reading "EN · AAC · Stereo" makes you translate the code yourself,
+        // and the same file's subtitles were already saying "English".
+        language && language !== "und" ? languageName(language) : "",
         this.audioCodecs[id]?.toUpperCase() ?? "",
         // 6 and 8 are the counts anyone recognises by name.
         channels === 6 ? "5.1" : channels === 8 ? "7.1" : channels === 2 ? "Stereo" : "",
       ].filter(Boolean);
-      return [{ id, label: parts.join(" · ") || `Track ${id + 1}` }];
+      return [{
+        id,
+        label: parts.join(" · ") || `Track ${id + 1}`,
+        lang: language,
+      }];
     });
   }
 
@@ -658,6 +773,7 @@ export class MediabunnyPlayer {
     await this.context?.close().catch(() => undefined);
     this.context = null;
     this.gain = null;
+    this.compressor = null;
     this.audioSink = null;
     if (this.audioTrack) await this.openAudio();
     else this.report("buffering", "That track cannot be decoded here.");
@@ -677,10 +793,35 @@ export class MediabunnyPlayer {
     this.applyVolume();
   }
 
+  setStableVolume(value: boolean) {
+    this.stableVolume = value;
+    this.connectAudioOutput();
+  }
+
+  setPlaybackRate(value: number) {
+    const next = Math.max(0.25, Math.min(2, value));
+    if (next === this.playbackRate) return;
+    // Capture the position using the old rate before changing the clock.
+    const position = this.currentTime;
+    const wasPlaying = this.playing;
+    if (wasPlaying) {
+      this.playing = false;
+      this.generation += 1;
+      this.silence();
+    }
+    this.pausedAt = position;
+    this.playbackRate = next;
+    if (wasPlaying) void this.play();
+  }
+
   stop() {
     this.stopped = true;
     this.playing = false;
+    this.priming = false;
+    this.releasePicture = null;
     this.generation += 1;
+    this.videoGeneration += 1;
+    this.videoRunning = false;
     this.silence();
     if (this.frameHandle !== null) cancelAnimationFrame(this.frameHandle);
     void this.context?.close().catch(() => undefined);
@@ -695,6 +836,18 @@ export class MediabunnyPlayer {
     if (this.gain)
       // Quadratic, because loudness is not linear in the slider's travel.
       this.gain.gain.value = this.muted ? 0 : this.volume ** 2;
+  }
+
+  private connectAudioOutput() {
+    if (!this.gain || !this.context) return;
+    this.gain.disconnect();
+    this.compressor?.disconnect();
+    if (this.stableVolume && this.compressor) {
+      this.gain.connect(this.compressor);
+      this.compressor.connect(this.context.destination);
+    } else {
+      this.gain.connect(this.context.destination);
+    }
   }
 
   private silence() {
@@ -714,6 +867,26 @@ export class MediabunnyPlayer {
     if (!context) return;
     context.clearRect(0, 0, this.canvas.width, this.canvas.height);
     context.drawImage(frame.canvas, 0, 0, this.canvas.width, this.canvas.height);
+    this.drawn += 1;
+  }
+
+  /**
+   * Whether anything has actually reached the screen.
+   *
+   * This engine runs its own clock, so a file whose packets parse but whose
+   * frames never decode plays perfectly as far as the interface is concerned:
+   * the duration is right, the time advances, the scrubber moves, and the
+   * picture is black and silent. That is not a state anything reported,
+   * because nothing failed — the decoder simply never answered. It is the
+   * hardest kind of broken to describe, so the player asks instead.
+   */
+  hasRendered(): boolean {
+    return this.drawn > 0;
+  }
+
+  /** What was found out about this browser's decoders, for a failure to quote. */
+  decoderSummary(): string {
+    return this.decoders;
   }
 
   /**
@@ -738,11 +911,68 @@ export class MediabunnyPlayer {
       this.report("error", error instanceof Error ? error.message : "Decoding failed");
       this.stop();
     };
-    void this.runVideo(generation).catch(failed);
+    // Video leads, but only when it has to be opened. Both the clock and the
+    // audio schedule then count from the moment its first frame lands, so the
+    // two start together however long that took. An unpause has a decoder
+    // already parked on the next frame, so there is nothing to wait for and
+    // waiting would be a stall of this engine's own making.
+    const reopening = !!this.videoSink && !this.videoRunning;
+    this.priming = reopening;
+    if (reopening) {
+      this.pictureReady = new Promise<void>((resolve) => {
+        const open = () => {
+          if (this.releasePicture !== open) return;
+          this.releasePicture = null;
+          if (this.generation === generation && !this.stopped) {
+            // Set here rather than in a `then`, so nothing waiting on this can
+            // resume before the clock it reads has an origin.
+            this.contextStartTime = this.clockTime();
+            this.priming = false;
+            if (this.playing) this.reportReady();
+          }
+          resolve();
+        };
+        this.releasePicture = open;
+        // A file this browser cannot decode video from still plays its sound.
+        // Long enough to cover opening a decoder, and matched to the window
+        // after which the engine says for itself that nothing has been drawn.
+        setTimeout(open, PICTURE_WAIT_MS);
+      });
+      const videoGeneration = this.videoGeneration;
+      this.videoRunning = true;
+      void this.runVideo(videoGeneration)
+        .catch((error: unknown) => {
+          if (this.videoGeneration !== videoGeneration || this.stopped) return;
+          // Whatever was waiting on the first frame must not wait out the
+          // whole budget for one that is never coming.
+          this.releasePicture?.();
+          // A decoder parked through a long pause can have its read time out.
+          // Paused, that is recoverable: the loop closes and the next play
+          // opens a new one at the resume point. Only a failure during
+          // playback is a failure of playback.
+          if (this.playing) failed(error);
+        })
+        .finally(() => {
+          if (this.videoGeneration === videoGeneration) this.videoRunning = false;
+        });
+    } else {
+      // Nothing to wait for, so the clock starts where it was asked to.
+      this.contextStartTime = this.clockTime();
+      this.pictureReady = Promise.resolve();
+    }
     void this.runAudio(generation).catch(failed);
-    const tick = () => {
+    // The decode and audio clocks run independently of React. Reporting at
+    // display refresh rate only made the entire player tree render 60-120
+    // times a second, which could starve video decoding and make pause taps
+    // feel delayed on slower devices. Ten updates per second keeps the
+    // seekbar and subtitles responsive without competing with the decoder.
+    let lastReportAt = -Infinity;
+    const tick = (now: number) => {
       if (this.generation !== generation || this.stopped) return;
-      this.options.onTime?.(this.currentTime, this.duration);
+      if (now - lastReportAt >= 100) {
+        lastReportAt = now;
+        this.options.onTime?.(this.currentTime, this.duration);
+      }
       if (this.duration && this.currentTime >= this.duration) {
         this.playing = false;
         this.silence();
@@ -760,15 +990,25 @@ export class MediabunnyPlayer {
     const start = this.startedFrom;
     let pending: WrappedCanvas | null = null;
     for await (const frame of this.videoSink.canvases(start)) {
-      if (this.generation !== generation || this.stopped) return;
+      if (this.videoGeneration !== generation || this.stopped) return;
+      // Decoding has to begin at the keyframe before the resume point, so the
+      // first frames out of it are ones already watched. Drawing them rewinds
+      // the picture a second or two before it jumps forward again.
+      if (frame.timestamp < start) continue;
       // Held until its moment, then drawn — the audio clock decides when, so
       // the two stay together rather than drifting apart.
       pending = frame;
+      // Paused, the clock has stopped and this waits here holding the frame it
+      // was about to draw — which is exactly where an unpause needs it.
       while (pending && pending.timestamp > this.currentTime) {
         await new Promise((resolve) => requestAnimationFrame(resolve));
-        if (this.generation !== generation || this.stopped) return;
+        if (this.videoGeneration !== generation || this.stopped) return;
       }
-      if (pending) this.draw(pending);
+      if (pending) {
+        this.draw(pending);
+        // The picture is back, so the clock and the sound may start.
+        this.releasePicture?.();
+      }
       pending = null;
     }
   }
@@ -776,20 +1016,30 @@ export class MediabunnyPlayer {
   private async runAudio(generation: number) {
     if (!this.audioSink || !this.context || !this.gain) return;
     const context = this.context;
+    // The sound waits for the picture rather than the other way round.
+    await this.pictureReady;
+    if (this.generation !== generation || this.stopped) return;
     for await (const { buffer, timestamp } of this.audioSink.buffers(
       this.startedFrom,
     )) {
       if (this.generation !== generation || this.stopped) return;
       const node = context.createBufferSource();
       node.buffer = downmixToStereo(buffer, context);
+      node.playbackRate.value = this.playbackRate;
       node.connect(this.gain);
 
-      let at = this.contextStartTime + timestamp - this.startedFrom;
+      let at =
+        this.contextStartTime +
+        (timestamp - this.startedFrom) / this.playbackRate;
       // Rounded to a sample boundary, or consecutive buffers land fractionally
       // apart and click.
       at = Math.round(context.sampleRate * at) / context.sampleRate;
       if (at >= context.currentTime) node.start(at);
-      else node.start(context.currentTime, context.currentTime - at);
+      else
+        node.start(
+          context.currentTime,
+          (context.currentTime - at) * this.playbackRate,
+        );
 
       this.queuedNodes.add(node);
       node.onended = () => this.queuedNodes.delete(node);

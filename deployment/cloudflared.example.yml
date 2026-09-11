@@ -1,0 +1,16 @@
+# EXAMPLE ONLY: adapt an existing locally managed tunnel, not the Zima app YAML.
+# The tunnel credentials belong to cloudflared, never to the Nuvio containers.
+# See PROXY_SETUP.md for video-delivery restrictions and dashboard settings.
+tunnel: YOUR_EXISTING_TUNNEL_UUID
+credentials-file: /etc/cloudflared/YOUR_EXISTING_TUNNEL_UUID.json
+
+ingress:
+  - hostname: watch.example.com
+    # Reachable FROM cloudflared. localhost is not the Zima host inside a container.
+    service: http://192.168.1.10:3075
+    originRequest:
+      httpHostHeader: watch.example.com
+      connectTimeout: 10s
+      disableChunkedEncoding: false
+      http2Origin: false
+  - service: http_status:404

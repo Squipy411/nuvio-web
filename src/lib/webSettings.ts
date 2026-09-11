@@ -29,8 +29,8 @@ export type PosterSettings = {
 };
 
 export const POSTER_DEFAULTS: PosterSettings = {
-  widthDp: 126,
-  heightDp: 189,
+  widthDp: 140,
+  heightDp: 210,
   cornerRadiusDp: 12,
   catalogLandscapeModeEnabled: false,
   hideLabelsEnabled: false,
@@ -40,6 +40,34 @@ export const POSTER_DEFAULTS: PosterSettings = {
   hoverPreviewTrailerSoundEnabled: false,
   hoverPreviewTrailerStartSeconds: 0,
 };
+
+/**
+ * Poster size as a share of the default card, which is the only thing the
+ * appearance page offers: the stored width and height move together, so a
+ * poster never stops being 2:3 and never crops its artwork to fit a shape
+ * nobody meant to choose.
+ *
+ * The range is what the stored width accepts — 88 to 260 against a default of
+ * 140, so 63% to 185% — floored at the tighter end and capped at a round 185.
+ * Height follows from the same percentage and is inside its own 112–390 by
+ * construction, since it is the looser of the two bounds.
+ */
+export const POSTER_SCALE_MIN = 65;
+export const POSTER_SCALE_MAX = 185;
+
+export const posterScale = (poster: Pick<PosterSettings, "widthDp">) =>
+  Math.min(
+    POSTER_SCALE_MAX,
+    Math.max(
+      POSTER_SCALE_MIN,
+      Math.round((poster.widthDp / POSTER_DEFAULTS.widthDp) * 100),
+    ),
+  );
+
+export const posterSizeAt = (percent: number) => ({
+  widthDp: Math.round((POSTER_DEFAULTS.widthDp * percent) / 100),
+  heightDp: Math.round((POSTER_DEFAULTS.heightDp * percent) / 100),
+});
 
 export type ResizeMode = "Fit" | "Fill" | "Zoom" | "Stretch";
 export type AutoPlayMode = "MANUAL" | "FIRST_STREAM" | "REGEX_MATCH";

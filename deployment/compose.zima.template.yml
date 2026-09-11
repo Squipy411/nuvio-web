@@ -35,6 +35,10 @@ services:
       TRANSCODE_IDLE_TIMEOUT: "90"
       # For access through a public domain, restrict this to your Nuvio user ID(s).
       COMPANION_ALLOWED_USERS: ""
+      # Recommended with HTTPS proxies: exact comma-separated browser origins.
+      # Example: https://watch.example.com,http://192.168.1.10:3075
+      # Empty keeps same-Host LAN compatibility; forwarded headers are not trusted.
+      COMPANION_PUBLIC_ORIGINS: ""
     read_only: true
     tmpfs:
       - /tmp:size=1200m,mode=1777

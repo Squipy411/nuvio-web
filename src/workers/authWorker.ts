@@ -10,6 +10,7 @@ const AUTH_LOCK_KEY = "nuvio-web-auth-session";
 const AUTH_CHANNEL_NAME = "nuvio-web-auth-vault-v2";
 const workerId = randomId();
 const authChannel = new BroadcastChannel(AUTH_CHANNEL_NAME);
+let authWorkTail: Promise<unknown> = Promise.resolve();
 
 type WorkerCommand =
   | { id: number; type: "companionSession" }
@@ -77,6 +78,7 @@ function clearMemorySession() {
   accessToken = "";
   refreshToken = "";
   refreshFlight = null;
+  companionCsrf = "";
 }
 
 async function clearSession() {
@@ -88,16 +90,28 @@ function invalidateOtherVaults() {
   authChannel.postMessage({ type: "invalidate", source: workerId });
 }
 
+function announceSessionLost() {
+  self.postMessage({ type: "sessionLost" });
+}
+
 authChannel.addEventListener("message", (event: MessageEvent<unknown>) => {
   const message = event.data as { type?: string; source?: string } | null;
-  if (message?.type === "invalidate" && message.source !== workerId)
+  if (message?.type === "invalidate" && message.source !== workerId) {
     clearMemorySession();
+    announceSessionLost();
+  }
 });
 
 async function withAuthLock<T>(work: () => Promise<T>): Promise<T> {
-  if (typeof navigator !== "undefined" && navigator.locks)
-    return navigator.locks.request(AUTH_LOCK_KEY, { mode: "exclusive" }, work);
-  return work();
+  // Plain LAN HTTP does not expose Web Locks. Still serialize this vault's
+  // sign-in/restore/logout so they cannot rotate or delete one another.
+  const run = authWorkTail.catch(() => undefined).then(async () => {
+    if (typeof navigator !== "undefined" && navigator.locks)
+      return await navigator.locks.request(AUTH_LOCK_KEY, { mode: "exclusive" }, work);
+    return await work();
+  });
+  authWorkTail = run;
+  return run;
 }
 
 function assertRestPath(path: string) {
@@ -205,33 +219,46 @@ async function refresh(): Promise<string> {
   if (refreshFlight) return refreshFlight;
   const currentBackend = backend;
   const currentGeneration = generation;
+  const currentUserId = user?.id;
   if (!currentBackend || !refreshToken)
     throw new Error("The Nuvio session has expired. Sign in again.");
   const run = withAuthLock(async () => {
+    if (currentGeneration !== generation)
+      throw new Error("The Nuvio session changed while refreshing.");
     const saved = await getValue<StoredRefreshSession>(SESSION_KEY);
+    if (currentGeneration !== generation)
+      throw new Error("The Nuvio session changed while refreshing.");
     if (
       !saved ||
       saved.backend.url !== currentBackend.url ||
+      saved.user.id !== currentUserId ||
       !saved.refreshToken.trim()
-    )
+    ) {
+      clearMemorySession();
+      announceSessionLost();
       throw new Error("The saved Nuvio session has expired. Sign in again.");
-    const payload = await fetchJson<TokenPayload>(
-      currentBackend,
-      "/auth/v1/token?grant_type=refresh_token",
-      { method: "POST", body: JSON.stringify({ refresh_token: saved.refreshToken }) },
-      "",
-      requestController.signal,
-    );
-    await acceptTokens(payload, currentGeneration, currentBackend);
-    return accessToken;
-  })
-    .catch(async (error) => {
-      if (error instanceof RequestError && [400, 401, 403].includes(error.status)) {
+    }
+    try {
+      const payload = await fetchJson<TokenPayload>(
+        currentBackend,
+        "/auth/v1/token?grant_type=refresh_token",
+        { method: "POST", body: JSON.stringify({ refresh_token: saved.refreshToken }) },
+        "",
+        requestController.signal,
+      );
+      await acceptTokens(payload, currentGeneration, currentBackend);
+      return accessToken;
+    } catch (error) {
+      if (currentGeneration === generation && error instanceof RequestError && [400, 401, 403].includes(error.status)) {
+        // Delete under the same lock as refresh. A late rejection must not
+        // erase a different account that signed in while we were waiting.
         await clearSession();
+        announceSessionLost();
         invalidateOtherVaults();
       }
       throw error;
-    })
+    }
+  })
     .finally(() => {
       if (refreshFlight === run) refreshFlight = null;
     });
@@ -246,19 +273,27 @@ async function authorizedRequest(
   assertRestPath(path);
   const currentBackend = backend;
   const currentGeneration = generation;
+  const requestToken = accessToken;
   if (!currentBackend || !accessToken)
     throw new Error("Sign in first.");
   try {
-    return await fetchJson(
+    const value = await fetchJson(
       currentBackend,
       path,
       init,
-      accessToken,
+      requestToken,
       requestController.signal,
     );
+    if (currentGeneration !== generation)
+      throw new Error("The Nuvio session changed while this request was running.");
+    return value;
   } catch (error) {
     if (!(error instanceof RequestError) || error.status !== 401) throw error;
-    const refreshed = await refresh();
+    if (currentGeneration !== generation)
+      throw new Error("The Nuvio session changed while this request was running.");
+    // Another request may have rotated the token while this 401 travelled
+    // back. Reuse that token instead of rotating it again for every catalog.
+    const refreshed = accessToken !== requestToken ? accessToken : await refresh();
     if (currentGeneration !== generation)
       throw new Error("The Nuvio session changed while this request was running.");
     return fetchJson(
@@ -274,21 +309,36 @@ async function authorizedRequest(
 async function handle(command: WorkerCommand): Promise<unknown> {
   if (command.type === "companionSession") {
     if (!backend || !accessToken) throw new Error("Sign into Nuvio to connect the companion.");
-    const exchange = () => fetch(new URL("../api/companion/auth", self.location.origin + "/").toString(), {
-      method: "POST", credentials: "same-origin",
-      headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
-      body: JSON.stringify({ backend: backend!.url }), signal: AbortSignal.timeout(12_000),
-    });
+    const currentGeneration = generation;
+    const currentBackend = backend;
+    const owner = user?.id;
+    const controller = requestController;
+    const assertCurrent = () => {
+      if (currentGeneration !== generation || backend !== currentBackend || user?.id !== owner)
+        throw new Error("The Nuvio session changed while connecting the companion.");
+    };
+    const exchange = () => {
+      assertCurrent();
+      return fetch(new URL("../api/companion/auth", self.location.origin + "/").toString(), {
+        method: "POST", credentials: "same-origin",
+        headers: { "content-type": "application/json", authorization: `Bearer ${accessToken}` },
+        body: JSON.stringify({ backend: currentBackend.url }),
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(12_000)]),
+      });
+    };
     let response = await exchange();
+    assertCurrent();
     if (response.status === 401) { await refresh(); response = await exchange(); }
+    assertCurrent();
     if (!response.ok) throw new Error(response.status === 403 ? "The companion is configured for a different backend or account." : "The companion is unavailable or your Nuvio session expired.");
     const result = await response.json() as { csrf: string; expires: number };
+    assertCurrent();
     companionCsrf = result.csrf;
     return result;
   }
   if (command.type === "restore") {
-    clearMemorySession();
     return withAuthLock(async () => {
+      clearMemorySession();
       const raw = await getValue<StoredRefreshSession | LegacyRefreshSession>(SESSION_KEY);
       if (!raw) return null;
       const legacyBackend = await getValue<BackendConfig>(BACKEND_KEY);
@@ -372,29 +422,28 @@ async function handle(command: WorkerCommand): Promise<unknown> {
     });
   }
   if (command.type === "signOut") {
-    if (companionCsrf) {
-      await fetch("/api/companion/logout", { method: "POST", credentials: "same-origin", headers: { "x-nuvio-csrf": companionCsrf }, signal: AbortSignal.timeout(3000) }).catch(() => undefined);
-      companionCsrf = "";
-    }
-    const oldBackend = backend;
-    const oldAccess = accessToken;
-    await withAuthLock(async () => {
+    return withAuthLock(async () => {
+      const oldBackend = backend;
+      const oldAccess = accessToken;
+      if (companionCsrf) {
+        await fetch("/api/companion/logout", { method: "POST", credentials: "same-origin", headers: { "x-nuvio-csrf": companionCsrf }, signal: AbortSignal.timeout(3000) }).catch(() => undefined);
+      }
       await clearSession();
       invalidateOtherVaults();
+      if (oldBackend && oldAccess) {
+        // scope=local, which the endpoint does not default to. Without it
+        // GoTrue revokes every refresh token the account holds, so signing out
+        // of this browser signed the same account out of the TV, the desktop app
+        // and every other device at once.
+        void fetchJson(
+          oldBackend,
+          "/auth/v1/logout?scope=local",
+          { method: "POST" },
+          oldAccess,
+        ).catch(() => undefined);
+      }
+      return null;
     });
-    if (oldBackend && oldAccess) {
-      // scope=local, which the endpoint does not default to. Without it
-      // GoTrue revokes every refresh token the account holds, so signing out
-      // of this browser signed the same account out of the TV, the desktop app
-      // and every other device at once.
-      void fetchJson(
-        oldBackend,
-        "/auth/v1/logout?scope=local",
-        { method: "POST" },
-        oldAccess,
-      ).catch(() => undefined);
-    }
-    return null;
   }
   return authorizedRequest(command.path, command.init);
 }

@@ -30,6 +30,10 @@ export async function startCompanion(network: typeof safeRequest = safeRequest, 
   const sessions = new PlaybackSessions(network); await sessions.init();
   const server = createServer({ maxHeaderSize: 16_384, requestTimeout: 30_000, headersTimeout: 10_000 }, (request, response) => {
     response.setHeader("Cache-Control", "no-store");
+    response.setHeader("CDN-Cache-Control", "no-store");
+    response.setHeader("Cloudflare-CDN-Cache-Control", "no-store");
+    // Also instruct an outer reverse proxy not to spool authenticated media.
+    response.setHeader("X-Accel-Buffering", "no");
     response.setHeader("X-Content-Type-Options", "nosniff");
     response.setHeader("Referrer-Policy", "no-referrer");
     const path = new URL(request.url ?? "/", "http://companion").pathname;

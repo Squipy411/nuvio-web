@@ -9,6 +9,7 @@ import {
   X,
 } from "lucide-react";
 import { useState } from "react";
+import { Select } from "./Select";
 import {
   pluginSettingsLayout,
   readPluginSettings,
@@ -392,7 +393,7 @@ function PluginSettingsDialog({
               return (
                 <label className="plugin-field" key={`${key}:${index}`}>
                   <strong>{label}</strong>
-                  <select
+                  <Select
                     value={String(valueFor(field))}
                     onChange={(event) => setValues((current) => ({ ...current, [key]: event.target.value }))}
                   >
@@ -401,7 +402,7 @@ function PluginSettingsDialog({
                         {String(option.label ?? option.value ?? "")}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                   {description && <small>{description}</small>}
                 </label>
               );

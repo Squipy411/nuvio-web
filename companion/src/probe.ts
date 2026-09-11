@@ -2,21 +2,22 @@ import { spawn } from "node:child_process";
 import type { MediaProbe, MediaTrack } from "../../src/lib/companionPolicy.ts";
 import { HttpError } from "./security.ts";
 
-type ProbeStream = { index: number; codec_type?: string; codec_name?: string; profile?: string; bits_per_raw_sample?: string; pix_fmt?: string; width?: number; height?: number; channels?: number; avg_frame_rate?: string; color_transfer?: string; tags?: { language?: string; title?: string }; disposition?: { default?: number }; side_data_list?: Array<{ side_data_type?: string }> };
+type ProbeStream = { index: number; codec_type?: string; codec_name?: string; profile?: string; bits_per_raw_sample?: string; pix_fmt?: string; width?: number; height?: number; channels?: number; avg_frame_rate?: string; color_transfer?: string; tags?: { language?: string; title?: string }; disposition?: { default?: number; attached_pic?: number }; side_data_list?: Array<{ side_data_type?: string }> };
 export function mapProbe(data: { format?: { format_name?: string; duration?: string }; streams?: ProbeStream[] }): MediaProbe {
   const map = (s: ProbeStream): MediaTrack => {
     const rate = s.avg_frame_rate?.split("/").map(Number) ?? [];
     return { index: s.index, codec: s.codec_name ?? "unknown", profile: s.profile,
       language: s.tags?.language, title: s.tags?.title?.replace(/[\x00-\x1f]/g, "").slice(0, 120),
       channels: s.channels, width: s.width, height: s.height,
-      bitDepth: Number(s.bits_per_raw_sample) || (/10/.test(s.pix_fmt ?? "") ? 10 : 8),
+      bitDepth: Number(s.bits_per_raw_sample) || Number(/p(9|10|12|14|16)(?:le|be)?$/.exec(s.pix_fmt ?? "")?.[1]) || 8,
       frameRate: rate[1] ? rate[0] / rate[1] : undefined,
       hdr: ["smpte2084", "arib-std-b67"].includes(s.color_transfer ?? ""),
       dolbyVision: s.side_data_list?.some((item) => /DOVI/i.test(item.side_data_type ?? "")),
       default: s.disposition?.default === 1 };
   };
+  const video = data.streams?.find((s) => s.codec_type === "video" && s.disposition?.attached_pic !== 1);
   return { container: data.format?.format_name ?? "unknown", duration: Math.max(0, Number(data.format?.duration) || 0),
-    video: data.streams?.find((s) => s.codec_type === "video") ? map(data.streams.find((s) => s.codec_type === "video")!) : undefined,
+    video: video ? map(video) : undefined,
     audio: (data.streams ?? []).filter((s) => s.codec_type === "audio").map(map),
     subtitles: (data.streams ?? []).filter((s) => s.codec_type === "subtitle").map(map), seekable: false };
 }

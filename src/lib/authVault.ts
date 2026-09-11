@@ -14,6 +14,7 @@
 
 import type { AuthApi } from "../platform/types.ts";
 import type { BackendConfig, Session } from "../types";
+import { clearCompanionAuthorization } from "./companionAuthState.ts";
 
 type VaultCommand =
   | { type: "companionSession" }
@@ -27,6 +28,7 @@ type VaultCommand =
     };
 
 type VaultResponse =
+  | { type: "sessionLost" }
   | { id: number; ok: true; value: unknown }
   | { id: number; ok: false; error: string };
 
@@ -36,6 +38,10 @@ const vaultPending = new Map<
   { resolve(value: unknown): void; reject(error: Error): void }
 >();
 const lostListeners = new Set<() => void>();
+function notifySessionLost() {
+  clearCompanionAuthorization();
+  for (const listener of lostListeners) listener();
+}
 
 /**
  * Started on first use rather than at import.
@@ -54,6 +60,11 @@ function vault(): Worker {
   });
 
   worker.addEventListener("message", (event: MessageEvent<VaultResponse>) => {
+    if ("type" in event.data && event.data.type === "sessionLost") {
+      notifySessionLost();
+      return;
+    }
+    if (!("id" in event.data)) return;
     const pending = vaultPending.get(event.data.id);
     if (!pending) return;
     vaultPending.delete(event.data.id);
@@ -67,7 +78,9 @@ function vault(): Worker {
     vaultPending.clear();
     // Announced rather than returned: the vault can fail while nothing is
     // waiting on it, and a session believed to be live is worse than none.
-    for (const listener of lostListeners) listener();
+    worker.terminate();
+    if (tokenVault === worker) tokenVault = null;
+    notifySessionLost();
   });
 
   tokenVault = worker;
@@ -75,6 +88,7 @@ function vault(): Worker {
 }
 
 function vaultCall<T>(command: VaultCommand): Promise<T> {
+  if (["signIn", "signOut", "restore"].includes(command.type)) clearCompanionAuthorization();
   const id = ++vaultMessageId;
   const worker = vault();
   return new Promise<T>((resolve, reject) => {

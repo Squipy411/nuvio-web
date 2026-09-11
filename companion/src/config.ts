@@ -5,11 +5,21 @@ function integer(name: string, fallback: number, min: number, max: number) {
   if (!Number.isSafeInteger(value) || value < min || value > max) throw new Error(`Invalid ${name}`);
   return value;
 }
+export function parsePublicOrigins(value: string) {
+  return [...new Set(value.split(",").map((item) => item.trim()).filter(Boolean).map((item) => {
+    const origin = new URL(item);
+    if (!["http:", "https:"].includes(origin.protocol) || origin.username || origin.password || origin.pathname !== "/" || origin.search || origin.hash || origin.hostname.includes("*")) {
+      throw new Error("COMPANION_PUBLIC_ORIGINS must contain exact HTTP(S) origins, without paths or wildcards");
+    }
+    return origin.origin;
+  }))];
+}
 export const config = {
   port: integer("PORT", 3101, 1, 65535),
   backendUrl: (process.env.NUVIO_SUPABASE_URL || defaults.backendUrl).replace(/\/+$/, ""),
   publishableKey: process.env.NUVIO_SUPABASE_ANON_KEY || defaults.publishableKey,
   allowedUsers: (process.env.COMPANION_ALLOWED_USERS || "").split(",").map((value) => value.trim()).filter(Boolean),
+  publicOrigins: parsePublicOrigins(process.env.COMPANION_PUBLIC_ORIGINS || ""),
   tempRoot: process.env.TRANSCODE_TEMP_DIR || "/tmp/nuvio-companion",
   maxTranscodes: integer("MAX_TRANSCODES", 2, 1, 16),
   maxSessions: integer("MAX_PLAYBACK_SESSIONS", 8, 1, 64),

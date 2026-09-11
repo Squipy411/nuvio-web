@@ -131,13 +131,51 @@ export async function probeSource(
         reason:
           "The host did not answer in time. It may be slow, or the link may have expired — fetch the sources again, or try an external player.",
       };
-    // fetch rejects with an opaque TypeError for every network-level refusal,
-    // and cross-origin policy is far and away the usual one.
+    // Which of the network-level refusals this was, established rather than
+    // guessed: they all arrive as the same opaque TypeError.
     return {
       ok: false,
-      reason:
-        "The browser could not reach this source. The host most likely does not allow other sites to read it (CORS), which no in-browser player can work around — use an external player, or pick another source.",
+      reason: await describeFetchFailure(url, headers, fetchImpl),
     };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Says why a fetch failed, having checked rather than assumed.
+ *
+ * `fetch` rejects with the same opaque TypeError whether the host refused a
+ * cross-origin read, the connection never opened, DNS failed, or something on
+ * the device blocked it. Both callers used to answer "CORS" to all of them,
+ * because it is the most common — which makes the message a guess presented as
+ * a finding, and wrong often enough to be worth not saying.
+ *
+ * A `no-cors` request settles it. It cannot read the response, but it still
+ * makes the request: if it resolves, the host answered and the only thing that
+ * stopped the first attempt was the cross-origin policy. If it rejects too,
+ * nothing reached the host and the policy is irrelevant.
+ */
+export async function describeFetchFailure(
+  url: string,
+  headers?: Record<string, string>,
+  fetchImpl: typeof fetch = fetch,
+): Promise<string> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    // No Range and no custom headers: `no-cors` forbids anything that is not
+    // safelisted, and a request it refuses to send proves nothing.
+    const response = await fetchImpl(url, {
+      method: "GET",
+      mode: "no-cors",
+      signal: controller.signal,
+      ...(headers ? {} : {}),
+    });
+    void response.body?.cancel().catch(() => undefined);
+    return "This host answers, but does not allow this page to read the file (CORS). No in-browser player can work around that, because the bytes themselves are refused — use an external player, or pick another source.";
+  } catch {
+    return "The browser could not reach this host at all: the request never got an answer. That is a network, DNS or connection problem rather than a permissions one — check the link is still valid, or try another source.";
   } finally {
     clearTimeout(timer);
   }

@@ -14,6 +14,7 @@ import type {
 } from "../types";
 import { platform } from "../platform/index.ts";
 import { runtimeBackend } from "./runtimeBackend.ts";
+import { createSessionWriteQueue } from "./sessionWriteQueue.ts";
 import {
   blobRawValue,
   blobStringPayload,
@@ -86,6 +87,44 @@ function loadClientId() {
 
 export const CLIENT_ID = loadClientId();
 let activeSession: Session | null = null;
+const accountWrites = createSessionWriteQueue(() => activeSession);
+const profileWrites = new WeakMap<Session, Map<number, { pending: number; revision: number }>>();
+
+/** Quiet reads and app updates must wait for queued watch/library/settings/addon writes. */
+export function accountSyncState(profileIndex?: number) {
+  if (profileIndex === undefined) return accountWrites.state();
+  const state = activeSession ? profileWrites.get(activeSession)?.get(profileIndex) : null;
+  return state ? { ...state } : { pending: 0, revision: 0 };
+}
+
+function orderedWrite<T>(
+  profileIndex: number,
+  channel: string,
+  work: (request: typeof rpc) => Promise<T>,
+): Promise<T> {
+  const session = activeSession;
+  let state: { pending: number; revision: number } | undefined;
+  if (session) {
+    let profiles = profileWrites.get(session);
+    if (!profiles) { profiles = new Map(); profileWrites.set(session, profiles); }
+    state = profiles.get(profileIndex);
+    if (!state) { state = { pending: 0, revision: 0 }; profiles.set(profileIndex, state); }
+    state.pending += 1;
+    state.revision += 1;
+  }
+  const key = JSON.stringify([session?.backend.url, session?.user.id, profileIndex, channel]);
+  return accountWrites.run(key, (assertCurrent) => {
+    const request = async <Result>(name: string, body: unknown): Promise<Result> => {
+      assertCurrent();
+      const result = await rpc<Result>(name, body);
+      assertCurrent();
+      return result;
+    };
+    return work(request);
+  }).finally(() => {
+    if (state) { state.pending -= 1; state.revision += 1; }
+  });
+}
 
 // The session lives wherever the shell keeps it — a Worker in the browser, a
 // process outside the webview in the desktop shell. This module only ever
@@ -178,16 +217,20 @@ async function secureAuthorized<T>(
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
-  if (!activeSession) throw new Error("Sign in first.");
+  const session = activeSession;
+  if (!session) throw new Error("Sign in first.");
   const headers: Record<string, string> = {};
   new Headers(init.headers).forEach((value, key) => {
     headers[key] = value;
   });
-  return platform.auth.request<T>(path, {
+  const result = await platform.auth.request<T>(path, {
     method: init.method,
     body: typeof init.body === "string" ? init.body : undefined,
     headers,
   });
+  if (activeSession !== session)
+    throw new Error("The Nuvio session changed while this request was running.");
+  return result;
 }
 
 export async function rpc<T>(name: string, body: unknown): Promise<T> {
@@ -345,15 +388,17 @@ export async function saveAddons(
   profileIndex: number,
   addons: AddonRow[],
 ): Promise<void> {
-  await rpc("sync_push_addons", {
-    p_profile_id: profileIndex,
-    p_addons: addons.map((addon, index) => ({
-      url: addon.url,
-      name: addon.name ?? "",
-      enabled: addon.enabled,
-      sort_order: index,
-    })),
-    p_origin_client_id: CLIENT_ID,
+  return orderedWrite(profileIndex, "addons", async (request) => {
+    await request("sync_push_addons", {
+      p_profile_id: profileIndex,
+      p_addons: addons.map((addon, index) => ({
+        url: addon.url,
+        name: addon.name ?? "",
+        enabled: addon.enabled,
+        sort_order: index,
+      })),
+      p_origin_client_id: CLIENT_ID,
+    });
   });
 }
 
@@ -484,13 +529,16 @@ export async function pushSettingsBlob(
   profileIndex: number,
   next: SettingsBlob,
 ): Promise<SettingsBlob> {
-  await rpc("sync_push_profile_settings_blob", {
-    p_profile_id: profileIndex,
-    p_platform: settingsPlatform(),
-    p_settings_json: next,
-    p_origin_client_id: CLIENT_ID,
+  const targetPlatform = settingsPlatform();
+  return orderedWrite(profileIndex, `settings:${targetPlatform}`, async (request) => {
+    await request("sync_push_profile_settings_blob", {
+      p_profile_id: profileIndex,
+      p_platform: targetPlatform,
+      p_settings_json: next,
+      p_origin_client_id: CLIENT_ID,
+    });
+    return next;
   });
-  return next;
 }
 
 export type PinVerifyResult = {
@@ -690,40 +738,42 @@ export async function setWatched(
   watched: boolean,
   progressRows: ProgressRow[],
 ): Promise<void> {
-  if (watched) {
-    await rpc("sync_push_watched_items", {
+  return orderedWrite(profileIndex, "watch", async (request) => {
+    if (watched) {
+      await request("sync_push_watched_items", {
+        p_profile_id: profileIndex,
+        p_items: [
+          {
+            content_id: identity.contentId,
+            content_type: identity.contentType,
+            title,
+            season: identity.season ?? null,
+            episode: identity.episode ?? null,
+            watched_at: Date.now(),
+          },
+        ],
+        p_origin_client_id: CLIENT_ID,
+      });
+    } else {
+      await request("sync_delete_watched_items", {
+        p_profile_id: profileIndex,
+        p_keys: [
+          {
+            content_id: identity.contentId,
+            season: identity.season ?? null,
+            episode: identity.episode ?? null,
+          },
+        ],
+        p_origin_client_id: CLIENT_ID,
+      });
+    }
+    // A stale resume point would still draw a progress bar under a row the user
+    // just toggled, so clear it in both directions.
+    await request("sync_delete_watch_progress", {
       p_profile_id: profileIndex,
-      p_items: [
-        {
-          content_id: identity.contentId,
-          content_type: identity.contentType,
-          title,
-          season: identity.season ?? null,
-          episode: identity.episode ?? null,
-          watched_at: Date.now(),
-        },
-      ],
+      p_keys: [resolveProgressKey(progressRows, identity)],
       p_origin_client_id: CLIENT_ID,
     });
-  } else {
-    await rpc("sync_delete_watched_items", {
-      p_profile_id: profileIndex,
-      p_keys: [
-        {
-          content_id: identity.contentId,
-          season: identity.season ?? null,
-          episode: identity.episode ?? null,
-        },
-      ],
-      p_origin_client_id: CLIENT_ID,
-    });
-  }
-  // A stale resume point would still draw a progress bar under a row the user
-  // just toggled, so clear it in both directions.
-  await rpc("sync_delete_watch_progress", {
-    p_profile_id: profileIndex,
-    p_keys: [resolveProgressKey(progressRows, identity)],
-    p_origin_client_id: CLIENT_ID,
   });
 }
 
@@ -740,10 +790,12 @@ export async function clearProgress(
   identity: WatchIdentity,
   progressRows: ProgressRow[],
 ): Promise<void> {
-  await rpc("sync_delete_watch_progress", {
-    p_profile_id: profileIndex,
-    p_keys: [resolveProgressKey(progressRows, identity)],
-    p_origin_client_id: CLIENT_ID,
+  return orderedWrite(profileIndex, "watch", async (request) => {
+    await request("sync_delete_watch_progress", {
+      p_profile_id: profileIndex,
+      p_keys: [resolveProgressKey(progressRows, identity)],
+      p_origin_client_id: CLIENT_ID,
+    });
   });
 }
 
@@ -760,26 +812,28 @@ export async function addToLibrary(
   item: Meta,
 ): Promise<void> {
   const rating = Number.parseFloat(item.imdbRating ?? "");
-  await rpc("sync_push_library_items", {
-    p_profile_id: profileIndex,
-    p_items: [
-      {
-        content_id: item.id,
-        content_type: item.type,
-        name: item.name,
-        poster: item.poster ?? null,
-        poster_shape: (item.posterShape ?? "POSTER").toUpperCase(),
-        // Nuvio falls back to the banner when there is no backdrop.
-        background: item.background ?? item.banner ?? null,
-        description: item.description ?? null,
-        release_info: item.releaseInfo ?? null,
-        imdb_rating: Number.isFinite(rating) ? rating : null,
-        genres: item.genres ?? [],
-        addon_base_url: item.manifestUrl ?? "",
-        added_at: Date.now(),
-      },
-    ],
-    p_origin_client_id: CLIENT_ID,
+  return orderedWrite(profileIndex, "library", async (request) => {
+    await request("sync_push_library_items", {
+      p_profile_id: profileIndex,
+      p_items: [
+        {
+          content_id: item.id,
+          content_type: item.type,
+          name: item.name,
+          poster: item.poster ?? null,
+          poster_shape: (item.posterShape ?? "POSTER").toUpperCase(),
+          // Nuvio falls back to the banner when there is no backdrop.
+          background: item.background ?? item.banner ?? null,
+          description: item.description ?? null,
+          release_info: item.releaseInfo ?? null,
+          imdb_rating: Number.isFinite(rating) ? rating : null,
+          genres: item.genres ?? [],
+          addon_base_url: item.manifestUrl ?? "",
+          added_at: Date.now(),
+        },
+      ],
+      p_origin_client_id: CLIENT_ID,
+    });
   });
 }
 
@@ -788,10 +842,12 @@ export async function removeFromLibrary(
   contentId: string,
   contentType: string,
 ): Promise<void> {
-  await rpc("sync_delete_library_items", {
-    p_profile_id: profileIndex,
-    p_keys: [{ content_id: contentId, content_type: contentType }],
-    p_origin_client_id: CLIENT_ID,
+  return orderedWrite(profileIndex, "library", async (request) => {
+    await request("sync_delete_library_items", {
+      p_profile_id: profileIndex,
+      p_keys: [{ content_id: contentId, content_type: contentType }],
+      p_origin_client_id: CLIENT_ID,
+    });
   });
 }
 
@@ -822,28 +878,32 @@ export async function pushProgress(
   ended: boolean,
   progressRows: ProgressRow[],
 ): Promise<boolean> {
+  if (!Number.isFinite(positionMs) || !Number.isFinite(durationMs)) return false;
   const position = Math.max(0, Math.round(positionMs));
   const duration = Math.max(0, Math.round(durationMs));
   const completed = isComplete(position, duration, ended);
   if (!completed && position < PROGRESS_STORE_THRESHOLD_MS) return false;
-  await rpc("sync_push_watch_progress", {
-    p_profile_id: profileIndex,
-    p_entries: [
-      {
-        content_id: identity.contentId,
-        content_type: identity.contentType,
-        video_id: identity.videoId,
-        season: identity.season ?? null,
-        episode: identity.episode ?? null,
-        position: completed && duration > 0 ? duration : position,
-        duration,
-        last_watched: Date.now(),
-        progress_key: resolveProgressKey(progressRows, identity),
-      },
-    ],
-    p_origin_client_id: CLIENT_ID,
+  const lastWatched = Date.now();
+  return orderedWrite(profileIndex, "watch", async (request) => {
+    await request("sync_push_watch_progress", {
+      p_profile_id: profileIndex,
+      p_entries: [
+        {
+          content_id: identity.contentId,
+          content_type: identity.contentType,
+          video_id: identity.videoId,
+          season: identity.season ?? null,
+          episode: identity.episode ?? null,
+          position: completed && duration > 0 ? duration : position,
+          duration,
+          last_watched: lastWatched,
+          progress_key: resolveProgressKey(progressRows, identity),
+        },
+      ],
+      p_origin_client_id: CLIENT_ID,
+    });
+    return true;
   });
-  return true;
 }
 
 export function currentSession(): Session | null {
@@ -1177,7 +1237,7 @@ export type DeltaOperation = "upsert" | "delete";
 
 async function deltaCursor(rpcName: string, profileIndex: number) {
   const value = await rpc<number | null>(rpcName, { p_profile_id: profileIndex });
-  return typeof value === "number" ? value : null;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
 }
 
 /**
@@ -1198,11 +1258,16 @@ async function drainDelta(
       p_limit: DELTA_PAGE_SIZE,
     });
     if (!events?.length) break;
-    apply(events);
-    cursor = events.reduce(
+    const nextCursor = events.reduce(
       (highest, event) => Math.max(highest, Number(event.event_id ?? 0)),
       cursor,
     );
+    // A malformed/non-advancing page otherwise loops forever, hammering the
+    // account service and keeping profile loading alive indefinitely.
+    if (!Number.isSafeInteger(nextCursor) || nextCursor <= cursor)
+      throw new Error("The watch sync cursor did not advance.");
+    apply(events);
+    cursor = nextCursor;
     if (events.length < DELTA_PAGE_SIZE) break;
   }
   return cursor;
@@ -1219,14 +1284,21 @@ export async function pullProgressDelta(
   since: number,
   rows: ProgressRow[],
 ): Promise<{ rows: ProgressRow[]; cursor: number }> {
-  const byKey = new Map(rows.map((row) => [row.progressKey ?? "", row]));
+  // Older clients can omit progress_key. Empty-string keys collapsed every
+  // such title into one row even when the server returned no new events.
+  const byKey = new Map(rows.map((row) => [row.progressKey || buildProgressKey(row), row]));
   const cursor = await drainDelta(
     "sync_pull_watch_progress_delta",
     profileIndex,
     since,
     (events) => {
       for (const event of events) {
-        const key = String(event.progress_key ?? "");
+        const key = String(event.progress_key ?? "") || buildProgressKey({
+          contentId: String(event.content_id ?? ""),
+          contentType: String(event.content_type ?? ""),
+          season: event.season == null ? undefined : Number(event.season),
+          episode: event.episode == null ? undefined : Number(event.episode),
+        });
         if (String(event.operation ?? "").toLowerCase() === "delete") {
           byKey.delete(key);
           continue;

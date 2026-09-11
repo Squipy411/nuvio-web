@@ -8,6 +8,7 @@ import { HttpError } from "./security.ts";
 export class HlsResources extends Map<string, string> {
   private playlists = new Map<string, Set<string>>();
   private seen = new Map<string, number>();
+  private idsByUrl = new Map<string, string>();
   private clock: () => number;
   private maximum: number;
   private graceMs: number;
@@ -15,8 +16,28 @@ export class HlsResources extends Map<string, string> {
     super(); this.clock = clock; this.maximum = maximum; this.graceMs = graceMs;
   }
 
+  override set(id: string, url: string): this {
+    const previous = this.get(id);
+    if (previous !== undefined && this.idsByUrl.get(previous) === id) this.idsByUrl.delete(previous);
+    super.set(id, url); this.idsByUrl.set(url, id); return this;
+  }
+
+  override delete(id: string): boolean {
+    const url = this.get(id);
+    if (url !== undefined && this.idsByUrl.get(url) === id) this.idsByUrl.delete(url);
+    this.seen.delete(id); this.playlists.delete(id);
+    return super.delete(id);
+  }
+
+  override clear() {
+    super.clear(); this.idsByUrl.clear(); this.seen.clear(); this.playlists.clear();
+  }
+
   register(url: string) {
-    for (const [id, value] of this) if (value === url) { this.seen.set(id, this.clock()); return id; }
+    // VOD manifests can contain thousands of segments. A reverse index avoids
+    // an O(n²) scan on every playlist refresh without changing opaque URL rules.
+    const existing = this.idsByUrl.get(url);
+    if (existing !== undefined) { this.seen.set(existing, this.clock()); return existing; }
     if (this.size >= this.maximum) throw new HttpError(413, "Playlist contains too many active resources.");
     const id = randomBytes(24).toString("base64url");
     this.set(id, url); this.seen.set(id, this.clock()); return id;
@@ -38,7 +59,7 @@ export class HlsResources extends Map<string, string> {
     }
     const cutoff = this.clock() - this.graceMs;
     for (const id of this.keys()) if (!reachable.has(id) && (this.seen.get(id) ?? 0) < cutoff) {
-      this.delete(id); this.seen.delete(id); this.playlists.delete(id);
+      this.delete(id);
     }
   }
 }

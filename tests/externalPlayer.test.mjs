@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { infusePlaybackUrl, shortcutReturnUrl } from "../src/lib/externalPlayer.ts";
+import { canPlayInApp, infusePlaybackUrl, shortcutReturnUrl } from "../src/lib/externalPlayer.ts";
+import { loadRuntimeBackend } from "../src/lib/runtimeBackend.ts";
 
 test("Infuse handoff encodes signed stream URLs and a useful filename", () => {
   const result = infusePlaybackUrl(
@@ -51,4 +52,19 @@ test("the Shortcut return address follows wherever the app is served from", () =
       .split("?").slice(1).join("?"),
   );
   assert.equal(bare.get("text"), "webapp://example.com/?nuvio-external=stopped");
+});
+
+test("self-hosted companion enables the in-app route on Apple mobile without changing static hosting", async (t) => {
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    if (descriptor) Object.defineProperty(globalThis, "navigator", descriptor);
+    else delete globalThis.navigator;
+    globalThis.fetch = originalFetch;
+  });
+  Object.defineProperty(globalThis, "navigator", { configurable: true, value: { userAgent: "iPhone", platform: "iPhone", maxTouchPoints: 5 } });
+  assert.equal(canPlayInApp(), false);
+  globalThis.fetch = async () => Response.json({ backendUrl: "https://api.nuvio.tv", publishableKey: "synthetic-public-key" });
+  await loadRuntimeBackend();
+  assert.equal(canPlayInApp(), true);
 });

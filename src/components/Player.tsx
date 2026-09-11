@@ -1,12 +1,28 @@
 import type Hls from "hls.js";
-import { SolidPause, SolidPlay } from "./PlaybackIcons";
+import { Select } from "./Select";
+import {
+  ClosedCaptionIcon,
+  HdIcon,
+  SolidPause,
+  SolidPlay,
+  SourceSwapIcon,
+} from "./PlaybackIcons";
 import { automaticSkipSegment, nextEpisodeDue, shouldBlurEpisode } from "../lib/playbackPolicy";
 import { nativePlayerPreferences } from "../lib/nativePlayerPreferences";
 import { startNativePlaybackSession } from "../lib/nativePlaybackSession";
 import { coverNativePlayerSurface, revealNativePlayerSurface } from "../lib/nativePlayerSurface";
 import { platform } from "../platform/index.ts";
 import { t } from "../lib/i18n.ts";
+import { canPlayInApp } from "../lib/externalPlayer";
 import { languageName } from "../lib/languageName.ts";
+import { loadSubtitles } from "../lib/addons.ts";
+import {
+  activeBrowserSubtitleText,
+  chooseBrowserSubtitle,
+  isForcedSubtitle,
+  parseBrowserSubtitles,
+  type BrowserSubtitleCue,
+} from "../lib/subtitles.ts";
 import type { ResizeMode, PlayerState } from "../platform/types.ts";
 import { safeHttpUrl } from "../lib/security";
 import {
@@ -17,30 +33,40 @@ import {
 import {
   assessPlayback,
   audioIsSilent,
+  isAppleWebKit,
   shouldUseRemuxFallback,
 } from "../lib/playback";
 import type { MediabunnyPlayer } from "../lib/mediabunnyPlayer";
 import type { CompanionPlayer } from "../lib/companionPlayer.ts";
-import { loadSubtitleSources } from "../lib/addons.ts";
 import { copyText } from "../lib/copyText.ts";
+import { companionRequest } from "../lib/companionClient.ts";
 import {
   browserColor,
+  type StreamBadgeSettings,
   type WebPlayerSettings,
 } from "../lib/webSettings";
 import {
   ArrowLeft,
+  AudioLines,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   Eye,
   Info,
   ExternalLink,
   FastForward,
-  List,
+  Gauge,
+  ListMusic,
+  ListVideo,
   LoaderCircle,
-  Captions,
   Maximize,
   PictureInPicture2,
-  Music2,
+  Minus,
+  Play,
+  Plus,
+  Settings,
   SkipForward,
+  SlidersHorizontal,
   Volume2,
   VolumeX,
   X,
@@ -63,7 +89,15 @@ import {
   watchKey,
   type WatchIndex,
 } from "../lib/progress";
-import { EpisodeRow } from "./Details";
+import { EpisodeRow, SourceBadges } from "./Details";
+import {
+  loadEpisodeRatings,
+  type EpisodeRatings,
+} from "../lib/episodeRatings";
+import {
+  tmdbIdForMeta,
+  type MetadataEnrichmentConfig,
+} from "../lib/metadataEnrichment";
 import {
   activeSkipSegment,
   loadSkipSegments,
@@ -71,12 +105,20 @@ import {
   skipLabel,
   type SkipSegment,
 } from "../lib/skipSegments";
-import type { ExternalPlayerMode, InstalledAddon, Meta, Stream, Video } from "../types";
+import type {
+  ExternalPlayerMode,
+  InstalledAddon,
+  Meta,
+  Stream,
+  Subtitle,
+  Video,
+} from "../types";
 
 // Present only in the desktop shell. Keeping this capability check here makes
 // the player chrome shared while the bytes still take the right route: a web
 // page decodes in <video>/canvas, and Tauri hands the same source to libmpv.
 const nativePlayer = platform.player;
+const EMPTY_ADDONS: InstalledAddon[] = [];
 
 /** Cycled in this order by the player's picture-mode control. */
 /**
@@ -117,11 +159,21 @@ const AUDIO_ECHO_MS = 900;
  * the label and nothing on screen.
  */
 const RESIZE_MODES: ResizeMode[] = ["Fit", "Zoom", "Stretch"];
+const PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const;
+
+function formatPlaybackRate(value: number) {
+  return `${Number.isInteger(value) ? value : value.toFixed(2).replace(/0$/, "")}×`;
+}
+
+function storedPlaybackRate() {
+  const value = Number(localStorage.getItem("nuvio-web-playback-rate") ?? 1);
+  return Number.isFinite(value) ? clamp(value, 0.25, 2) : 1;
+}
 
 /** How long the picture-mode name stays up after a change. */
 const PICTURE_NOTE_MS = 5000;
 
-type AudioChoice = { id: number; label: string };
+type AudioChoice = { id: number; label: string; lang?: string };
 type NativeAudioTrackList = {
   length: number;
   [index: number]: { enabled: boolean; label?: string; language?: string };
@@ -155,10 +207,163 @@ function runtimeHintSeconds(meta: Meta, video?: Video) {
   return bareMinutes > 0 ? bareMinutes * 60 : undefined;
 }
 
+/**
+ * The players this stream can be handed off to.
+ *
+ * "Open with" means another application. The native player is this one — it
+ * plays here, through the browser's own video element — so it belongs in the
+ * "Play in" list where a source is chosen, and not in a menu whose whole
+ * meaning is leaving.
+ */
+function handoffOptions() {
+  return platform.externalPlayer
+    .options("player")
+    .filter((option) => option.mode !== "native");
+}
+
+/**
+ * What makes two entries the same release.
+ *
+ * The list the picker shows is fetched separately from the one the stream was
+ * chosen out of, so they are never the same objects. The link is what actually
+ * identifies a file; an addon that hands back a magnet or a debrid job rather
+ * than a URL is matched on what it called it instead.
+ */
+function sourceKey(item: Stream) {
+  return (
+    item.url ||
+    item.externalUrl ||
+    item.infoHash ||
+    `${item.addonName}:${item.title || item.name}`
+  );
+}
+
+/** The parts of a caption's appearance the player can change while it plays. */
+export type SubtitleStylePatch = Partial<
+  Pick<
+    WebPlayerSettings,
+    | "subtitleFontSizeSp"
+    | "subtitleBottomOffset"
+    | "subtitleTextColor"
+    | "subtitleBackgroundColor"
+    | "subtitleOutlineColor"
+    | "subtitleOutlineEnabled"
+    | "subtitleOutlineWidth"
+    | "subtitleBold"
+  >
+>;
+
+/**
+ * Colours offered for caption text and its background, as Android ARGB — the
+ * shape these are stored in, and the shape every other Nuvio client reads.
+ *
+ * A short list on purpose: this is a menu over a running film, and a colour
+ * wheel there is a worse answer than eight colours that are all legible.
+ */
+const CAPTION_COLORS: Array<{ name: string; value: string }> = [
+  { name: "White", value: "#FFFFFFFF" },
+  { name: "Yellow", value: "#FFFFEB3B" },
+  { name: "Cyan", value: "#FF4DD0E1" },
+  { name: "Green", value: "#FF81C784" },
+  { name: "Orange", value: "#FFFFB74D" },
+  { name: "Pink", value: "#FFF06292" },
+  { name: "Grey", value: "#FFBDBDBD" },
+  { name: "Black", value: "#FF000000" },
+];
+
+/** Backgrounds behind the text, transparent first because it is the default. */
+const CAPTION_BACKGROUNDS: Array<{ name: string; value: string }> = [
+  { name: "None", value: "#00000000" },
+  { name: "Dim", value: "#66000000" },
+  { name: "Black", value: "#CC000000" },
+  { name: "Solid", value: "#FF000000" },
+  { name: "White", value: "#CCFFFFFF" },
+];
+
+/** What the steppers will go to; the same bounds the settings page enforces. */
+const CAPTION_SIZE_MIN = 6;
+const CAPTION_SIZE_MAX = 40;
+const CAPTION_OFFSET_MAX = 100;
+
+/**
+ * Whether a stored colour is the swatch that was offered.
+ *
+ * Compared through the CSS form rather than the stored text: the same colour
+ * arrives written as `#FFFFFFFF` from one client and `#ffffffff` from another,
+ * and a swatch that never looks selected reads as one that does not work.
+ */
+function sameColor(stored: string, option: string) {
+  return (
+    browserColor(stored, "").toLowerCase() ===
+    browserColor(option, "").toLowerCase()
+  );
+}
+
+/** The release name an addon put on a source, as the sheet shows it. */
+function sourceLabel(item: Stream) {
+  return (
+    item.title ||
+    item.description ||
+    item.behaviorHints?.filename ||
+    item.name ||
+    item.addonName
+  );
+}
+
+export type PlayerProps = {
+  stream: Stream;
+  meta: Meta;
+  video?: Video;
+  /** Subtitle providers are queried only by the browser player. */
+  addons?: InstalledAddon[];
+  onClose(): void;
+  onExternalPlay(
+    mode: ExternalPlayerMode,
+    url: string,
+    positionMs: number,
+  ): void;
+  startPositionMs?: number;
+  episodes?: Video[];
+  blurUnwatchedEpisodes?: boolean;
+  /** The same choice the detail page's list obeys. */
+  episodeCardStyle?: "horizontal" | "list";
+  /** Resolves the show's TMDB id, which is what the ratings service is keyed by. */
+  tmdbConfig?: MetadataEnrichmentConfig["tmdb"];
+  /** Other releases of what is playing, once something has gone and asked. */
+  sources?: Stream[];
+  /** So the picker's rows carry the badges the sources sheet gives them. */
+  streamBadgeSettings?: StreamBadgeSettings;
+  /**
+   * Changes how captions look, from the player rather than from Settings.
+   *
+   * The same stored values either way, so what is set here over the picture is
+   * what Settings shows afterwards — and on the web it lands immediately,
+   * since the cue stylesheet is built from them.
+   */
+  onSubtitleStyle?(patch: SubtitleStylePatch): void;
+  sourcesBusy?: boolean;
+  /** Asked for when the picker is first opened, not before. */
+  onRequestSources?(): void;
+  /** @param positionMs where playback is now, so the swap resumes there. */
+  onSelectSource?(next: Stream, positionMs: number): void;
+  animeSkipClientId?: string;
+  watchIndex?: WatchIndex;
+  mode?: ExternalPlayerMode;
+  onPlayEpisode?(next: Video): void;
+  onProgress(positionMs: number, durationMs: number, ended: boolean): void;
+  onNativeProgressSnapshot?(
+    positionMs: number,
+    durationMs: number,
+    ended: boolean,
+  ): void;
+  settings: WebPlayerSettings;
+};
+
 export function Player({
   stream,
   meta,
   video,
+  addons = EMPTY_ADDONS,
   onClose,
   onExternalPlay,
   onProgress,
@@ -169,49 +374,17 @@ export function Player({
   watchIndex,
   onPlayEpisode,
   blurUnwatchedEpisodes = false,
+  episodeCardStyle = "horizontal",
+  tmdbConfig,
+  sources,
+  streamBadgeSettings,
+  onSubtitleStyle,
+  sourcesBusy = false,
+  onRequestSources,
+  onSelectSource,
   animeSkipClientId = "",
-  addons = [],
-}: {
-  addons?: InstalledAddon[];
-  stream: Stream;
-  meta: Meta;
-  video?: Video;
-  onClose(): void;
-  /**
-   * Hands the stream off to a player outside the browser. Raised rather than
-   * launched here: closing this player and recording where it got to are the
-   * app's to do, and both have to happen for the handoff to be worth anything.
-   */
-  onExternalPlay(
-    mode: ExternalPlayerMode,
-    url: string,
-    positionMs: number,
-  ): void;
-  /** Where to resume from. 0 starts at the beginning. */
-  startPositionMs?: number;
-  /**
-   * The run this episode belongs to, so the player can offer the next one and
-   * let another be chosen without leaving playback.
-   */
-  episodes?: Video[];
-  blurUnwatchedEpisodes?: boolean;
-  animeSkipClientId?: string;
-  watchIndex?: WatchIndex;
-  /** Resolves a source for another episode and switches to it. */
-  onPlayEpisode?(next: Video): void;
-  /** Reports a resume point. Fired periodically, on pause, and on exit. */
-  onProgress(positionMs: number, durationMs: number, ended: boolean): void;
-  /**
-   * Mirrors a checkpoint that the native shell is already persisting.
-   * Browser playback never calls this; doing so would create a second writer.
-   */
-  onNativeProgressSnapshot?(
-    positionMs: number,
-    durationMs: number,
-    ended: boolean,
-  ): void;
-  settings: WebPlayerSettings;
-}) {
+  mode,
+}: PlayerProps) {
   const playerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
@@ -225,11 +398,27 @@ export function Player({
   const companionRef = useRef<CompanionPlayer | null>(null);
   const lastCompanionProgressRef = useRef<{ position: number; duration: number; ended: boolean } | null>(null);
   const [playbackMode, setPlaybackMode] = useState("");
+  const conversionActive = ["remux", "audio-transcode", "transcode"].includes(playbackMode);
   const [legacySource, setLegacySource] = useState<string | null>(null);
   const [errorCopied, setErrorCopied] = useState(false);
   const hideTimer = useRef<number | undefined>(undefined);
+  const surfaceClickTimer = useRef<number | undefined>(undefined);
+  const surfaceMenuDismissedAt = useRef(0);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
+  /** Non-fatal: it is playing, but something about it is worth saying. */
+  const [notice, setNotice] = useState("");
+  /**
+   * Set when an automatic native attempt could not read the file.
+   *
+   * Only for the automatic case. Choosing the native player explicitly and
+   * having it fail is worth an error — that is the answer to what was asked.
+   * Being sent there by this player and finding the host will not serve it is
+   * not: before this routing existed, iOS played these files through the
+   * canvas with no sound, and a silent picture beats a dead screen.
+   */
+  const [nativeRefused, setNativeRefused] = useState(false);
+
   const [playing, setPlaying] = useState(false);
   const playingRef = useRef(false);
   playingRef.current = playing;
@@ -244,9 +433,21 @@ export function Player({
     return () => window.clearTimeout(timer);
   }, [warning]);
   const [currentTime, setCurrentTime] = useState(0);
+  /** Read by callbacks that must not be rebuilt on every tick of the clock. */
+  const currentTimeRef = useRef(0);
+  currentTimeRef.current = currentTime;
+  /** The source whose resume point has already been honoured. */
+  const resumedFor = useRef<string | undefined>(undefined);
   const [duration, setDuration] = useState(0);
   const [seekPreview, setSeekPreview] = useState<number | null>(null);
   const seekPreviewRef = useRef<number | null>(null);
+  const [seekThumbnail, setSeekThumbnail] = useState<{
+    image: string;
+    time: number;
+    left: number;
+  } | null>(null);
+  const thumbnailRequestRef = useRef(0);
+  const thumbnailBucketRef = useRef(-1);
   // libmpv accepts a seek on its command channel before its sampled position
   // catches up.  Keep the requested position authoritative during that short
   // window so polling cannot make the timeline jump target -> old -> target.
@@ -269,9 +470,32 @@ export function Player({
   const [muted, setMuted] = useState(
     () => localStorage.getItem("nuvio-web-muted") === "true",
   );
+  const [playbackRate, setPlaybackRate] = useState(storedPlaybackRate);
+  const [stableVolume, setStableVolume] = useState(
+    () => localStorage.getItem("nuvio-web-stable-volume") === "true",
+  );
+  const [hdrEnabled, setHdrEnabled] = useState(
+    () => localStorage.getItem("nuvio-web-hdr-enabled") !== "false",
+  );
+  const hdrControlSupported = useMemo(
+    () =>
+      typeof CSS !== "undefined" &&
+      CSS.supports("dynamic-range-limit", "standard"),
+    [],
+  );
   const [controlsVisible, setControlsVisible] = useState(true);
-  const [audioOpen, setAudioOpen] = useState(false);
-  const [subsOpen, setSubsOpen] = useState(false);
+  /**
+   * One menu behind one cog, rather than a button per setting along the bar.
+   *
+   * `null` is closed. Everything else is which page of it is showing: a list
+   * of settings, or the one a settings row opened. The pages share a panel and
+   * replace each other in it, so a track list is read where the setting that
+   * asked for it was, and the way back is the heading above it.
+   */
+  const [settingsPage, setSettingsPage] = useState<
+    null | "root" | "captions" | "captionVersions" | "audio" | "speed" | "captionStyle"
+  >(null);
+  const [subtitleGroupKey, setSubtitleGroupKey] = useState<string | null>(null);
   /**
    * How long polled audio state is disregarded after a local change.
    *
@@ -282,10 +506,40 @@ export function Player({
   const [subtitleTracks, setSubtitleTracks] = useState<
     Array<{ id: number; lang: string; label: string }>
   >([]);
+  const [addonSubtitles, setAddonSubtitles] = useState<Subtitle[]>([]);
+  const [browserSubtitleCues, setBrowserSubtitleCues] = useState<
+    BrowserSubtitleCue[]
+  >([]);
+  const [subtitleIndexBusy, setSubtitleIndexBusy] = useState(false);
+  const [subtitleFileBusy, setSubtitleFileBusy] = useState(false);
+  const subtitleFileGeneration = useRef(0);
   /** mpv's own convention: -1, or "no", means subtitles are off. */
   const [selectedSubtitle, setSelectedSubtitle] = useState(-1);
   const [externalPlayerOpen, setExternalPlayerOpen] = useState(false);
+  const [sourcesOpen, setSourcesOpen] = useState(false);
   const [episodesOpen, setEpisodesOpen] = useState(false);
+
+  useEffect(() => {
+    if (nativePlayer) return;
+    const controller = new AbortController();
+    const subtitleId = video?.id || meta.id;
+    subtitleFileGeneration.current += 1;
+    setAddonSubtitles([]);
+    setBrowserSubtitleCues([]);
+    setSelectedSubtitle(-1);
+    setSubtitleIndexBusy(true);
+    void loadSubtitles(meta.type, subtitleId, addons, controller.signal)
+      .then((tracks) => {
+        if (!controller.signal.aborted) setAddonSubtitles([...new Map([
+          ...(stream.subtitles ?? []).map((track) => ({ ...track, addonName: stream.addonName })),
+          ...tracks,
+        ].map((track) => [track.url, track])).values()]);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setSubtitleIndexBusy(false);
+      });
+    return () => controller.abort();
+  }, [addons, meta.id, meta.type, video?.id, stream.subtitles, stream.addonName]);
   /** Dismissed by hand, so it does not come back for the rest of the episode. */
   const [nextDismissed, setNextDismissed] = useState(false);
   const [skipSegments, setSkipSegments] = useState<SkipSegment[]>([]);
@@ -308,14 +562,15 @@ export function Player({
     return () => window.clearInterval(timer);
   }, []);
   const endsAt = useMemo(() => {
-    const left = duration - currentTime;
+    const left =
+      (duration - currentTime) / (nativePlayer || conversionActive ? 1 : playbackRate);
     if (!Number.isFinite(left) || left <= 0 || duration <= 0) return "";
     void clockTick;
     return new Date(Date.now() + left * 1000).toLocaleTimeString(undefined, {
       hour: "numeric",
       minute: "2-digit",
     });
-  }, [duration, currentTime, clockTick]);
+  }, [duration, currentTime, playbackRate, clockTick, conversionActive]);
   const seasons = useMemo(
     () =>
       [...new Set((episodes ?? []).map((item) => item.season ?? 0))].sort(
@@ -332,6 +587,30 @@ export function Player({
     () => (episodes ?? []).filter((item) => (item.season ?? 0) === season),
     [episodes, season],
   );
+  /**
+   * IMDb's per-episode scores, so this list reads as the detail page's list
+   * rather than the same rows with their badges missing.
+   *
+   * Asked for when the panel is first opened rather than when playback starts:
+   * the service is only worth a request if the list is actually looked at, and
+   * the lookup shares the detail page's cache — arriving here from a show that
+   * has already drawn them costs nothing.
+   */
+  const [episodeRatings, setEpisodeRatings] = useState<EpisodeRatings>(
+    () => new Map(),
+  );
+  useEffect(() => {
+    if (!episodesOpen || meta.type !== "series" || !tmdbConfig) return;
+    let live = true;
+    void tmdbIdForMeta(meta, tmdbConfig)
+      .then((tmdbId) => (tmdbId ? loadEpisodeRatings(tmdbId) : new Map()))
+      .then((ratings) => {
+        if (live) setEpisodeRatings(ratings as EpisodeRatings);
+      });
+    return () => {
+      live = false;
+    };
+  }, [episodesOpen, meta, meta.id, meta.type, tmdbConfig]);
   const [audioTracks, setAudioTracks] = useState<AudioChoice[]>([]);
   const [selectedAudio, setSelectedAudio] = useState(-1);
   const [nativeFullscreen, setNativeFullscreen] = useState(false);
@@ -349,7 +628,18 @@ export function Player({
   // the native state reports its first frame, exactly once per opened stream.
   const nativePictureModeReadyRef = useRef(false);
   const url = stream.url;
+  // A different stream is a different host: it deserves the attempt this one
+  // used up, and none of the last one's explanation.
+  useEffect(() => {
+    setNativeRefused(false);
+    setNotice("");
+  }, [url]);
   const externalUrl = stream.externalUrl || url;
+  useEffect(() => {
+    thumbnailRequestRef.current += 1;
+    thumbnailBucketRef.current = -1;
+    setSeekThumbnail(null);
+  }, [url]);
   const navigableExternalUrl = useMemo(
     () => safeHttpUrl(externalUrl),
     [externalUrl],
@@ -470,6 +760,73 @@ export function Player({
     return `.player-view video::cue { color:${color}; background:${background}; font-size:${clamp(settings.subtitleFontSizeSp, 6, 40)}px; font-weight:${settings.subtitleBold ? 700 : 400}; text-shadow:${shadow}; }`;
   }, [settings]);
 
+  /**
+   * The sample line in the customiser, drawn from the same values as the cue
+   * stylesheet — so what it shows is what the captions under it are doing.
+   */
+  const cuePreviewStyle = useMemo(() => {
+    const outline = browserColor(settings.subtitleOutlineColor, "#000");
+    const width = clamp(settings.subtitleOutlineWidth, 0, 10);
+    return {
+      color: browserColor(settings.subtitleTextColor, "#fff"),
+      background: browserColor(settings.subtitleBackgroundColor, "transparent"),
+      fontSize: `${clamp(settings.subtitleFontSizeSp, CAPTION_SIZE_MIN, CAPTION_SIZE_MAX)}px`,
+      fontWeight: settings.subtitleBold ? 700 : 400,
+      textShadow: settings.subtitleOutlineEnabled
+        ? `${width}px 0 ${outline}, -${width}px 0 ${outline}, 0 ${width}px ${outline}, 0 -${width}px ${outline}`
+        : "none",
+    } as CSSProperties;
+  }, [settings]);
+  const stepCaptionSize = (by: number) =>
+    onSubtitleStyle?.({
+      subtitleFontSizeSp: clamp(
+        settings.subtitleFontSizeSp + by,
+        CAPTION_SIZE_MIN,
+        CAPTION_SIZE_MAX,
+      ),
+    });
+  const stepCaptionOffset = (by: number) =>
+    onSubtitleStyle?.({
+      subtitleBottomOffset: clamp(
+        settings.subtitleBottomOffset + by,
+        0,
+        CAPTION_OFFSET_MAX,
+      ),
+    });
+
+  /**
+   * Hands the caption style to a shell that draws its own subtitles.
+   *
+   * A browser needs nothing here — the cue stylesheet above is the whole
+   * mechanism, and it re-renders with these values. mpv has to be told, and
+   * told again for a change made on the settings page mid-playback, which is
+   * why this watches the settings rather than the panel.
+   */
+  useEffect(() => {
+    if (!nativePlayer?.setSubtitleStyle) return;
+    void nativePlayer
+      .setSubtitleStyle({
+        fontSize: clamp(settings.subtitleFontSizeSp, CAPTION_SIZE_MIN, CAPTION_SIZE_MAX),
+        bold: settings.subtitleBold,
+        textColor: settings.subtitleTextColor,
+        backgroundColor: settings.subtitleBackgroundColor,
+        outlineEnabled: settings.subtitleOutlineEnabled,
+        outlineColor: settings.subtitleOutlineColor,
+        outlineWidth: clamp(settings.subtitleOutlineWidth, 0, 10),
+        bottomOffset: clamp(settings.subtitleBottomOffset, 0, CAPTION_OFFSET_MAX),
+      })
+      .catch(() => undefined);
+  }, [
+    settings.subtitleFontSizeSp,
+    settings.subtitleBold,
+    settings.subtitleTextColor,
+    settings.subtitleBackgroundColor,
+    settings.subtitleOutlineEnabled,
+    settings.subtitleOutlineColor,
+    settings.subtitleOutlineWidth,
+    settings.subtitleBottomOffset,
+  ]);
+
   const showControls = useCallback(() => {
     setControlsVisible(true);
     window.clearTimeout(hideTimer.current);
@@ -480,8 +837,9 @@ export function Player({
         : videoRef.current && !videoRef.current.paused;
     if (running)
       hideTimer.current = window.setTimeout(() => {
-        setAudioOpen(false);
+        setSettingsPage(null);
         setExternalPlayerOpen(false);
+        setSourcesOpen(false);
         setControlsVisible(false);
       }, 3000);
   }, []);
@@ -678,6 +1036,35 @@ export function Player({
     }
   }, [decoding, nativeFullscreen, reapplyPictureMode, showControls, videoFit]);
 
+  // Delay a single click very briefly so the first half of a double-click
+  // does not pause and immediately resume the movie before fullscreen opens.
+  const handleSurfaceClick = useCallback(() => {
+    window.clearTimeout(surfaceClickTimer.current);
+    // A visible menu owns the next background click. Closing it must not also
+    // leak through to the player transport and pause/resume the stream.
+    if (settingsPage !== null) {
+      surfaceClickTimer.current = undefined;
+      surfaceMenuDismissedAt.current = performance.now();
+      setSettingsPage(null);
+      showControls();
+      return;
+    }
+    surfaceClickTimer.current = window.setTimeout(() => {
+      surfaceClickTimer.current = undefined;
+      void togglePlayback();
+    }, 220);
+  }, [settingsPage, showControls, togglePlayback]);
+  const handleSurfaceDoubleClick = useCallback(() => {
+    window.clearTimeout(surfaceClickTimer.current);
+    surfaceClickTimer.current = undefined;
+    if (performance.now() - surfaceMenuDismissedAt.current < 400) return;
+    void toggleFullscreen();
+  }, [toggleFullscreen]);
+  useEffect(
+    () => () => window.clearTimeout(surfaceClickTimer.current),
+    [],
+  );
+
   useEffect(() => {
     const element = videoRef.current;
     const onFullscreenLayout = () => {
@@ -791,6 +1178,7 @@ export function Player({
           .map((track) => ({
             id: track.id,
             label: track.title || languageName(track.lang) || `Audio ${track.id}`,
+            lang: track.lang,
           }));
         setAudioTracks(tracks);
         setSelectedAudio(next.audioTrack);
@@ -886,13 +1274,17 @@ export function Player({
     if (nativePlayer) return;
     const element = videoRef.current;
     if (!element || !url) {
+      // Before the early return, not after it: a chosen source with no browser
+      // URL used to leave the player believing it was still mid-switch, which
+      // disables the source and next-episode controls for good — so the one
+      // way out of the failure was the way back in.
+      setSwitching(false);
       setWaiting(false);
       setError("This source does not provide a direct browser video URL.");
       return;
     }
     if (platform.auth.companionSession && legacySource !== url) {
       let disposed = false;
-      const subtitleController = new AbortController();
       setSwitching(false); setNextDismissed(false); setDecoding(false); setError("");
       element.volume = clamp(Number.isFinite(volume) ? volume : 1, 0, 1);
       element.muted = muted;
@@ -913,18 +1305,14 @@ export function Player({
             },
             time: (position, total) => { if (!disposed) { setCurrentTime(position); setDuration(total); } },
             audio: (tracks, selected) => { if (!disposed) { setAudioTracks(tracks); setSelectedAudio(selected); } },
-            subtitles: (tracks, selected) => { if (!disposed) { setSubtitleTracks(tracks); setSelectedSubtitle(selected); } },
+            subtitles: () => { /* Addon captions use the shared, styled subtitle overlay. */ },
           });
         companionRef.current = player;
         lastCompanionProgressRef.current = null;
         void player.start().catch(() => { if (!disposed) { setWaiting(false); setError("The player could not start this source."); } });
-        void loadSubtitleSources(meta.type, video?.id || meta.id, addons, subtitleController.signal).then((sources) => {
-          if (!disposed) player.setSubtitleSources(sources, settings.preferredSubtitleLanguage);
-        }).catch(() => undefined);
       });
       return () => {
         disposed = true;
-        subtitleController.abort();
         const player = companionRef.current;
         if (player) {
           const saved = { position: player.currentTime * 1000, duration: player.duration * 1000, ended: element.ended };
@@ -999,7 +1387,10 @@ export function Player({
       const choices = Array.from({ length: list.length }, (_, index) => ({
         id: index,
         label:
-          list[index].label || list[index].language || `Audio ${index + 1}`,
+          list[index].label ||
+          languageName(list[index].language) ||
+          `Audio ${index + 1}`,
+        lang: list[index].language,
       }));
       setAudioTracks(choices);
       if (!preferredAudioApplied) {
@@ -1062,6 +1453,9 @@ export function Player({
     };
     element.volume = clamp(Number.isFinite(volume) ? volume : 1, 0, 1);
     element.muted = muted;
+    element.defaultPlaybackRate = playbackRate;
+    element.playbackRate = playbackRate;
+    element.preservesPitch = true;
     element.playsInline = true;
     const onPlaying = () => {
       setPlaying(true);
@@ -1088,10 +1482,15 @@ export function Player({
     // would fight the user. Remuxed playback restarts conversion from the
     // Matroska cue instead of downloading linearly from zero to the resume
     // point.
-    let resumed = startPositionMs <= 0;
+    // Once per source, not once per run of this effect. The effect re-runs on
+    // things that have nothing to do with the file — a language preference, a
+    // route that refused — and each of those used to re-arm the seek, which
+    // would drag playback back to where a source was swapped an hour ago.
+    let resumed = startPositionMs <= 0 || resumedFor.current === url;
     const onResume = () => {
       if (resumed || !Number.isFinite(element.duration)) return;
       resumed = true;
+      resumedFor.current = url;
       const target = startPositionMs / 1000;
       // Never seek past the end; a stale row from a different cut of the same
       // episode would otherwise drop playback at the credits.
@@ -1148,7 +1547,83 @@ export function Player({
     // Media Source refuses these streams for reasons unrelated to whether the
     // machine can decode them, so the container is skipped entirely: frames go
     // to a canvas and audio to Web Audio.
+    /*
+     * Where this device has no in-app player, nothing gets played in it.
+     *
+     * The pickers stop offering it, but they are not the only way in:
+     * continue-watching and the next episode open playback directly. One
+     * guard here covers every route rather than four that have to agree.
+     *
+     * Downloads are exempt. A file already on the device is a blob, plays
+     * through the video element like any other local file, and none of what
+     * makes streaming unreliable on iOS applies to it.
+     */
+    if (!canPlayInApp() && externalUrl && /^https?:/i.test(externalUrl)) {
+      setWaiting(false);
+      setStatus("");
+      onExternalPlay(mode && mode !== "internal" ? mode : "copy", externalUrl, startPositionMs);
+      return cleanup;
+    }
     const verdict = assessPlayback(url, sourceText);
+    /*
+     * Chosen from the player menu, or forced with ?nativeMkv=1 for testing.
+     *
+     * It used to be the query parameter alone, which meant the one path that
+     * plays this audio on an iPhone could only be reached by editing the URL.
+     * Matroska is the only container that needs the remux; anything the video
+     * element already opens falls through to the ordinary native branch below.
+     */
+    /*
+     * Also chosen automatically where the canvas player cannot have audio at
+     * all.
+     *
+     * That engine decodes audio through WebCodecs, and on iOS `AudioDecoder`
+     * does not exist — so every codec probes false and the file plays silent,
+     * however playable it is. There is nothing to fix inside that path; the
+     * only fix is not to take it. Safari decodes this audio through a video
+     * element, which is what the remux feeds.
+     */
+    const noWebCodecsAudio = typeof AudioDecoder === "undefined";
+    const chosenNative =
+      mode === "native" ||
+      new URLSearchParams(window.location.search).get("nativeMkv") === "1";
+    const wantsNative =
+      !nativeRefused && (chosenNative || (isAppleWebKit() && noWebCodecsAudio));
+    if (wantsNative && /\.mkv(?:$|[?#\s])/i.test(`${url} ${sourceText}`)) {
+      const failed = (reason: unknown) => {
+        if (disposed) return;
+        setWaiting(false);
+        setStatus("");
+        const said = reason instanceof Error ? reason.message : "Native remux failed.";
+        if (chosenNative) {
+          setError(said);
+          return;
+        }
+        // Nobody asked for this path; it was taken because the canvas one has
+        // no audio here. If it cannot read the file, go back rather than end
+        // playback — silent video is what this device managed before, and it
+        // is better than a stopped screen.
+        setNotice(`${said} Playing without sound instead.`);
+        setNativeRefused(true);
+      };
+      let remux: import("../lib/nativeMkvPlayer").NativeMkvPlayer | null = null;
+      setStatus("Preparing native MKV playback…");
+      void import("../lib/nativeMkvPlayer").then(({ NativeMkvPlayer }) => {
+        if (disposed) return;
+        remux = new NativeMkvPlayer(
+        element,
+        url,
+        failed,
+        stream.behaviorHints?.proxyHeaders?.request,
+        settings.preferredAudioLanguage,
+      );
+        return remux.start(startPositionMs / 1000);
+      }).catch((reason) => {
+        remux?.stop();
+        failed(reason);
+      });
+      return () => { cleanup(); remux?.stop(); };
+    }
     if (shouldUseRemuxFallback(url, sourceText)) {
       const canvas = canvasRef.current;
       if (!canvas) return cleanup;
@@ -1169,6 +1644,7 @@ export function Player({
           } else if (next.state === "ready" || next.state === "ended") {
             setWaiting(false);
             setStatus("");
+            if (next.message) setNotice(next.message);
             if (next.state === "ended") setPlaying(false);
           } else {
             setWaiting(true);
@@ -1204,6 +1680,8 @@ export function Player({
       engineRef.current = engine;
       engine.setVolume(volume);
       engine.setMuted(muted);
+      engine.setPlaybackRate(playbackRate);
+      engine.setStableVolume(stableVolume);
       void engine
         .start()
         .then(() => {
@@ -1216,6 +1694,25 @@ export function Player({
           // elsewhere; the centre button is then the gesture.
           void engine.play().then(() => {
             if (!disposed) setPlaying(!engine.paused);
+            /*
+             * A clock with nothing behind it.
+             *
+             * This engine keeps its own time, so a file whose packets parse
+             * but whose frames never decode looks like it is playing: right
+             * duration, advancing position, moving scrubber, black picture,
+             * no sound. Nothing fails, so nothing is reported, and the
+             * interface says everything is fine. Six seconds in, ask whether
+             * a single frame ever reached the canvas, and say so if not —
+             * with what this browser admitted about its decoders, which is
+             * the only evidence anyone can send back from a phone.
+             */
+            window.setTimeout(() => {
+              if (disposed || engine.hasRendered()) return;
+              const decoders = engine.decoderSummary();
+              setNotice(
+                `Six seconds in and no frame has been drawn: this browser is reading the file but decoding nothing from it.${decoders ? ` ${decoders}` : ""}`,
+              );
+            }, 6000);
           }).catch((reason: unknown) => {
             if (disposed) return;
             engine.stop();
@@ -1281,7 +1778,9 @@ export function Player({
           const syncTracks = () => {
             const tracks = hls.audioTracks.map((track, index) => ({
               id: index,
-              label: track.name || track.lang || `Audio ${index + 1}`,
+              label:
+                track.name || languageName(track.lang) || `Audio ${index + 1}`,
+              lang: track.lang,
             }));
             setAudioTracks(tracks);
             if (!preferredAudioApplied) {
@@ -1322,7 +1821,7 @@ export function Player({
     return cleanup;
     // Volume is initialized once per source; UI changes update the element directly.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [url, showControls, meta.language, legacySource,
+  }, [url, showControls, meta.language, legacySource, nativeRefused,
     // Background profile sync produces a fresh settings object. Unrelated
     // theme/layout changes must not tear down an in-flight browser decoder.
     settings.preferredAudioLanguage, settings.secondaryPreferredAudioLanguage,
@@ -1333,6 +1832,27 @@ export function Player({
     localStorage.setItem("nuvio-web-volume", String(volume));
     localStorage.setItem("nuvio-web-muted", String(muted));
   }, [volume, muted]);
+  useEffect(() => {
+    localStorage.setItem("nuvio-web-playback-rate", String(playbackRate));
+    localStorage.setItem("nuvio-web-stable-volume", String(stableVolume));
+    localStorage.setItem("nuvio-web-hdr-enabled", String(hdrEnabled));
+  }, [playbackRate, stableVolume, hdrEnabled]);
+  useEffect(() => {
+    if (nativePlayer) return;
+    engineRef.current?.setPlaybackRate(playbackRate);
+    const element = videoRef.current;
+    if (element) {
+      // The bounded rolling conversion runs at real time. Faster consumption
+      // drains it; slower consumption lets unread segments expire. Keep the
+      // stored speed for direct playback, without offering broken conversion rates.
+      element.defaultPlaybackRate = conversionActive ? 1 : playbackRate;
+      element.playbackRate = conversionActive ? 1 : playbackRate;
+      element.preservesPitch = true;
+    }
+  }, [playbackRate, conversionActive]);
+  useEffect(() => {
+    if (!nativePlayer) engineRef.current?.setStableVolume(stableVolume);
+  }, [stableVolume]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (
@@ -1354,7 +1874,7 @@ export function Player({
       else if (event.key.toLowerCase() === "m") toggleMuted();
       else if (event.key.toLowerCase() === "f") toggleFullscreen();
       else if (event.key === "Escape") {
-        setSubsOpen(false); setAudioOpen(false); setEpisodesOpen(false); setExternalPlayerOpen(false); setInfoOpen(false); showControls();
+        setSettingsPage(null); setSourcesOpen(false); setEpisodesOpen(false); setExternalPlayerOpen(false); setInfoOpen(false); showControls();
       }
     };
     window.addEventListener("keydown", onKey);
@@ -1405,13 +1925,6 @@ export function Player({
   }, []);
 
   /**
-   * Subtitle track, including turning them off.
-   *
-   * Native only. A browser video's text tracks are already driven by the
-   * element and its own cue rendering, so the control is not built there —
-   * there is nothing for it to switch between that the page did not put there.
-   */
-  /**
    * The subtitle tracks worth offering.
    *
    * A release with forty language tracks made this menu a wall, and the account
@@ -1422,54 +1935,249 @@ export function Player({
    * The filter never empties the menu: if nothing matches, everything is shown,
    * because a list of nothing is worse than a long one.
    */
+  const browserSubtitleTracks = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const track of addonSubtitles) {
+      const key = `${languageName(track.lang).toLowerCase()}\u0000${track.addonName}`;
+      totals.set(key, (totals.get(key) ?? 0) + 1);
+    }
+    const seen = new Map<string, number>();
+    return addonSubtitles.map((track, id) => {
+      const language = languageName(track.lang) || "Unknown";
+      const key = `${language.toLowerCase()}\u0000${track.addonName}`;
+      const occurrence = (seen.get(key) ?? 0) + 1;
+      seen.set(key, occurrence);
+      const variant = (totals.get(key) ?? 0) > 1
+        ? ` · ${occurrence}/${totals.get(key)}`
+        : "";
+      return {
+        id,
+        lang: track.lang,
+        label: `${language} · ${track.addonName}${variant}`,
+        language,
+        addonName: track.addonName,
+        variantLabel: `${track.addonName}${variant}`,
+      };
+    });
+  }, [addonSubtitles]);
+  const offeredSubtitleTracks = nativePlayer
+    ? subtitleTracks
+    : browserSubtitleTracks;
   const visibleSubtitleTracks = useMemo(() => {
-    if (!settings.subtitleShowOnlyPreferredLanguages) return subtitleTracks;
+    if (
+      !settings.subtitleShowOnlyPreferredLanguages &&
+      settings.addonSubtitleStartupMode !== "PREFERRED_ONLY"
+    )
+      return offeredSubtitleTracks;
     const wanted = [
       settings.preferredSubtitleLanguage,
       settings.secondaryPreferredSubtitleLanguage,
     ]
-      .map((value) => value.trim().toLowerCase())
+      .map((value) => languageName(value).trim().toLowerCase())
       .filter(
         (value) =>
           value && !["none", "device", "forced", "default"].includes(value),
       );
-    if (!wanted.length) return subtitleTracks;
-    const matching = subtitleTracks.filter((track) =>
-      wanted.some((code) => track.lang.toLowerCase().startsWith(code)),
+    if (!wanted.length) return offeredSubtitleTracks;
+    const matching = offeredSubtitleTracks.filter((track) =>
+      wanted.includes(languageName(track.lang).toLowerCase()),
     );
-    return matching.length ? matching : subtitleTracks;
+    return matching.length ? matching : offeredSubtitleTracks;
   }, [
-    subtitleTracks,
+    offeredSubtitleTracks,
+    settings.addonSubtitleStartupMode,
     settings.subtitleShowOnlyPreferredLanguages,
     settings.preferredSubtitleLanguage,
     settings.secondaryPreferredSubtitleLanguage,
   ]);
 
-  const selectSubtitle = (id: number) => {
-    setSubsOpen(false);
-    if (companionRef.current) {
-      void companionRef.current.selectSubtitle(id).catch((reason: unknown) =>
-        setWarning(reason instanceof Error ? reason.message : "Could not load subtitles."));
+  /**
+   * Addon results frequently contain several complete subtitle files for the
+   * same language, each timed for a different release. They are alternatives,
+   * not pieces to concatenate, so the first page groups them and a second page
+   * exposes the individual versions only when there is a choice to make.
+   */
+  const browserSubtitleGroups = useMemo(() => {
+    if (nativePlayer) return [];
+    const groups = new Map<
+      string,
+      {
+        key: string;
+        label: string;
+        tracks: Array<(typeof browserSubtitleTracks)[number]>;
+      }
+    >();
+    for (const track of visibleSubtitleTracks) {
+      const browserTrack = browserSubtitleTracks.find(
+        (candidate) => candidate.id === track.id,
+      );
+      if (!browserTrack) continue;
+      const source = addonSubtitles[browserTrack.id];
+      const forced = source
+        ? isForcedSubtitle(source.id, source.lang, source.url)
+        : false;
+      const language =
+        browserTrack.language || languageName(browserTrack.lang) || "Unknown";
+      const key = `${language.toLowerCase()}\u0000${forced ? "forced" : "full"}`;
+      const group = groups.get(key) ?? {
+        key,
+        label: forced ? `${language} (Forced)` : language,
+        tracks: [],
+      };
+      group.tracks.push(browserTrack);
+      groups.set(key, group);
+    }
+    return [...groups.values()];
+  }, [addonSubtitles, browserSubtitleTracks, visibleSubtitleTracks]);
+  const openSubtitleGroup = useMemo(
+    () => browserSubtitleGroups.find((group) => group.key === subtitleGroupKey),
+    [browserSubtitleGroups, subtitleGroupKey],
+  );
+  useEffect(() => {
+    if (settingsPage === "captionVersions" && !openSubtitleGroup) {
+      setSettingsPage("captions");
+    }
+  }, [openSubtitleGroup, settingsPage]);
+
+  const canPickSubtitles =
+    !!nativePlayer || subtitleIndexBusy || browserSubtitleTracks.length > 0;
+  /** What the settings list shows beside each row, YouTube-fashion. */
+  const selectedSubtitleLabel = nativePlayer
+    ? offeredSubtitleTracks.find((track) => track.id === selectedSubtitle)?.label ??
+      t("player.off")
+    : browserSubtitleGroups.find((group) =>
+        group.tracks.some((track) => track.id === selectedSubtitle),
+      )?.label ?? t("player.off");
+  const selectedAudioLabel =
+    audioTracks.find((track) => track.id === selectedAudio)?.label ??
+    audioTracks[0]?.label ??
+    "Default";
+
+  const selectSubtitle = useCallback(async (id: number) => {
+    const generation = ++subtitleFileGeneration.current;
+    setSettingsPage(null);
+    if (nativePlayer) {
+      setSelectedSubtitle(id);
+      await nativePlayer.setSubtitleTrack(id).catch((reason: unknown) =>
+        setError(
+          reason instanceof Error ? reason.message : "Could not select subtitles.",
+        ),
+      );
+      return;
+    }
+    if (id < 0) {
+      setSelectedSubtitle(-1);
+      setBrowserSubtitleCues([]);
+      setSubtitleFileBusy(false);
+      return;
+    }
+    const track = addonSubtitles[id];
+    const subtitleUrl = safeHttpUrl(track?.url);
+    if (!track || !subtitleUrl) {
+      setWarning("That subtitle URL is not safe to open.");
       return;
     }
     setSelectedSubtitle(id);
-    void nativePlayer?.setSubtitleTrack(id).catch((reason: unknown) =>
-      setError(
-        reason instanceof Error ? reason.message : "Could not select subtitles.",
-      ),
+    setBrowserSubtitleCues([]);
+    setSubtitleFileBusy(true);
+    try {
+      let text: string;
+      try {
+        const response = await platform.request(subtitleUrl, {
+          timeoutMs: 8_000,
+          maxBytes: 2 * 1024 * 1024,
+        });
+        if (!response.ok) throw new Error(`Subtitle host returned HTTP ${response.status}.`);
+        text = response.body;
+        if (!parseBrowserSubtitles(text).length) throw new Error("Subtitle conversion required.");
+      } catch (reason) {
+        if (!companionRef.current) throw reason;
+        text = (await companionRequest<{ vtt: string }>("/subtitles", { url: subtitleUrl })).vtt;
+      }
+      const cues = parseBrowserSubtitles(text);
+      if (!cues.length)
+        throw new Error("This subtitle is not a readable WebVTT or SRT file.");
+      if (generation === subtitleFileGeneration.current)
+        setBrowserSubtitleCues(cues);
+    } catch (reason) {
+      if (generation !== subtitleFileGeneration.current) return;
+      setSelectedSubtitle(-1);
+      setWarning(
+        reason instanceof Error ? reason.message : "Could not load subtitles.",
+      );
+    } finally {
+      if (generation === subtitleFileGeneration.current)
+        setSubtitleFileBusy(false);
+    }
+  }, [addonSubtitles]);
+
+  const autoSubtitleFor = useRef("");
+  useEffect(() => {
+    if (nativePlayer || subtitleIndexBusy || !browserSubtitleTracks.length) return;
+    const preferred = settings.preferredSubtitleLanguage.trim().toLowerCase();
+    const selectedAudioLanguage = languageName(
+      audioTracks.find((track) => track.id === selectedAudio)?.lang,
+    ).toLowerCase();
+    const key = [
+      meta.type,
+      video?.id || meta.id,
+      preferred,
+      settings.secondaryPreferredSubtitleLanguage,
+      settings.subtitleUseForcedSubtitles,
+      settings.subtitleUseForcedSubtitles || preferred === "forced"
+        ? selectedAudioLanguage
+        : "",
+    ].join(":");
+    if (autoSubtitleFor.current === key) return;
+    autoSubtitleFor.current = key;
+    // "Off" is authoritative. A stale secondary-language preference must not
+    // silently turn subtitles back on after the primary control says Off.
+    if (!preferred || preferred === "none") {
+      if (selectedSubtitle >= 0) void selectSubtitle(-1);
+      return;
+    }
+    const chosen = chooseBrowserSubtitle(
+      addonSubtitles,
+      preferred,
+      settings.secondaryPreferredSubtitleLanguage,
+      navigator.languages?.length ? navigator.languages : [navigator.language],
+      selectedAudioLanguage,
+      settings.subtitleUseForcedSubtitles,
     );
-  };
+    if (chosen >= 0) void selectSubtitle(chosen);
+  }, [
+    addonSubtitles,
+    audioTracks,
+    browserSubtitleTracks,
+    meta.id,
+    meta.type,
+    selectSubtitle,
+    settings.preferredSubtitleLanguage,
+    settings.secondaryPreferredSubtitleLanguage,
+    settings.subtitleUseForcedSubtitles,
+    selectedAudio,
+    subtitleIndexBusy,
+    video?.id,
+  ]);
+
+  const activeBrowserSubtitle = useMemo(
+    () =>
+      nativePlayer || selectedSubtitle < 0
+        ? ""
+        : activeBrowserSubtitleText(browserSubtitleCues, currentTime),
+    [browserSubtitleCues, currentTime, selectedSubtitle],
+  );
 
   const selectAudio = (id: number) => {
     if (companionRef.current) {
-      setAudioOpen(false);
+      setSettingsPage(null);
       void companionRef.current.selectAudio(id).catch((reason: unknown) =>
         setError(reason instanceof Error ? reason.message : "Could not change audio."));
       return;
     }
     if (nativePlayer) {
       setSelectedAudio(id);
-      setAudioOpen(false);
+      setSettingsPage(null);
       void nativePlayer.setAudioTrack(id).catch((reason: unknown) =>
         setError(reason instanceof Error ? reason.message : "Could not select audio."),
       );
@@ -1478,7 +2186,7 @@ export function Player({
     if (engineRef.current) {
       void engineRef.current.selectAudioTrack(id);
       setSelectedAudio(id);
-      setAudioOpen(false);
+      setSettingsPage(null);
       return;
     }
     if (hlsRef.current) hlsRef.current.audioTrack = id;
@@ -1492,7 +2200,7 @@ export function Player({
           list[index].enabled = index === id;
     }
     setSelectedAudio(id);
-    setAudioOpen(false);
+    setSettingsPage(null);
   };
   const openExternalPlayer = (mode: ExternalPlayerMode) => {
     if (!externalUrl) return;
@@ -1602,6 +2310,31 @@ export function Player({
     [onPlayEpisode, switching, video?.id],
   );
 
+  /**
+   * Swaps the release without leaving playback.
+   *
+   * Same episode, different file: a host that has stalled, a track in a
+   * language this one does not carry, a size that suits the connection better.
+   * The position goes with it, so the swap picks up where the picture was
+   * rather than at the top of the file.
+   */
+  const startSource = useCallback(
+    (next: Stream) => {
+      if (closingRef.current || switching || sourceKey(next) === sourceKey(stream))
+        return;
+      if (nativePlayer) void nativeSessionRef.current?.stop().catch(() => undefined);
+      engineRef.current?.pause();
+      videoRef.current?.pause();
+      setPlaying(false);
+      setWaiting(true);
+      setStatus("Switching source…");
+      setSwitching(true);
+      setSourcesOpen(false);
+      onSelectSource?.(next, Math.max(0, Math.round(currentTimeRef.current * 1000)));
+    },
+    [onSelectSource, switching, stream],
+  );
+
   const closePlayer = useCallback(async () => {
     if (closingRef.current) return;
     closingRef.current = true;
@@ -1680,6 +2413,35 @@ export function Player({
 
   const seekLimit = duration || 0;
   const displayedTime = seekPreview ?? currentTime;
+  const previewSeekThumbnail = (event: {
+    currentTarget: HTMLDivElement;
+    clientX: number;
+  }) => {
+    if (!nativePlayer?.thumbnail || duration <= 0) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const left = clamp((event.clientX - rect.left) / Math.max(rect.width, 1), 0, 1);
+    const time = left * duration;
+    setSeekThumbnail((current) =>
+      current ? { ...current, time, left } : current,
+    );
+    const bucket = Math.floor((time * 1000) / 2000);
+    if (thumbnailBucketRef.current === bucket) return;
+    thumbnailBucketRef.current = bucket;
+    const request = ++thumbnailRequestRef.current;
+    void nativePlayer
+      .thumbnail(time * 1000)
+      .then((image) => {
+        if (image && thumbnailRequestRef.current === request) {
+          setSeekThumbnail({ image, time, left });
+        }
+      })
+      .catch(() => undefined);
+  };
+  const clearSeekThumbnail = () => {
+    thumbnailRequestRef.current += 1;
+    thumbnailBucketRef.current = -1;
+    setSeekThumbnail(null);
+  };
   const commitSeekPreview = (fallback: number) => {
     const target = seekPreviewRef.current ?? fallback;
     if (seekPreviewRef.current === null) return;
@@ -1695,8 +2457,23 @@ export function Player({
       onPointerDown={showControls}
     >
       <style>{cueCss}</style>
+      {/*
+        Keyed by source, so a swap gets new elements rather than the ones the
+        last source was using.
+
+        Changing a release mid-episode is the case this exists for. React runs
+        the teardown and the setup of the load effect back to back in one
+        commit, so the second source was being built on an element still
+        carrying the first: its buffered ranges, its readyState, its error, its
+        track lists, and a load algorithm that had only just been told to
+        abort. An episode change does the same thing but has seconds of
+        resolving in between, which is why it never showed this. New elements
+        cost a frame and make the two cases identical.
+      */}
       <video
+        key={`video:${url}`}
         ref={videoRef}
+        className={!hdrEnabled ? "player-hdr-limited" : undefined}
         playsInline
         autoPlay
         preload="auto"
@@ -1705,19 +2482,48 @@ export function Player({
           objectFit: videoFit,
           display: nativePlayer || decoding ? "none" : undefined,
         }}
-        onDoubleClick={toggleFullscreen}
+        onClick={handleSurfaceClick}
+        onDoubleClick={handleSurfaceDoubleClick}
       />
       {/* Where the decoder draws. Object-fit matches the video element so the
           two look the same whichever is playing. */}
       <canvas
+        key={`canvas:${url}`}
         ref={canvasRef}
-        className="player-canvas"
+        className={`player-canvas${!hdrEnabled ? " player-hdr-limited" : ""}`}
         style={{
           objectFit: videoFit,
           display: !nativePlayer && decoding ? undefined : "none",
         }}
-        onDoubleClick={toggleFullscreen}
+        onClick={handleSurfaceClick}
+        onDoubleClick={handleSurfaceDoubleClick}
       />
+      {!nativePlayer && activeBrowserSubtitle && (
+        <div
+          className="player-subtitle-overlay"
+          style={{
+            bottom: `calc(${clamp(settings.subtitleBottomOffset, 0, 100)}px + ${controlsVisible ? 92 : 0}px + env(safe-area-inset-bottom))`,
+            color: browserColor(settings.subtitleTextColor, "#fff"),
+            fontSize: `${clamp(settings.subtitleFontSizeSp, 6, 40)}px`,
+            fontWeight: settings.subtitleBold ? 700 : 400,
+            textShadow: settings.subtitleOutlineEnabled
+              ? `${settings.subtitleOutlineWidth}px 0 ${browserColor(settings.subtitleOutlineColor, "#000")}, -${settings.subtitleOutlineWidth}px 0 ${browserColor(settings.subtitleOutlineColor, "#000")}, 0 ${settings.subtitleOutlineWidth}px ${browserColor(settings.subtitleOutlineColor, "#000")}, 0 -${settings.subtitleOutlineWidth}px ${browserColor(settings.subtitleOutlineColor, "#000")}`
+              : "none",
+          }}
+          aria-live="off"
+        >
+          <span
+            style={{
+              background: browserColor(
+                settings.subtitleBackgroundColor,
+                "transparent",
+              ),
+            }}
+          >
+            {activeBrowserSubtitle}
+          </span>
+        </div>
+      )}
       <div className="player-shade player-shade-top" />
       <div className="player-shade player-shade-bottom" />
       <div className="player-top">
@@ -1747,8 +2553,15 @@ export function Player({
           <LoaderCircle className="spin" />
         </div>
       )}
+      {/* Paused only. A pause glyph held over a playing picture is furniture:
+          moving frames already say it is playing, and the thing that pauses is
+          the picture itself. */}
       {!error && !waiting && !playing && (
-        <button className="player-center" aria-label="Play" onClick={togglePlayback}>
+        <button
+          className="player-center"
+          aria-label="Play"
+          onClick={togglePlayback}
+        >
           <SolidPlay />
         </button>
       )}
@@ -1783,38 +2596,53 @@ export function Player({
       <div className="player-controls">
         <div className="player-timeline">
           <span>{formatTime(displayedTime)}</span>
-          <input
-            aria-label="Seek"
-            type="range"
-            min="0"
-            max={seekLimit}
-            step="0.1"
-            value={Math.min(displayedTime, seekLimit)}
-            onChange={(event) => {
-              const target = Number(event.target.value);
-              seekPreviewRef.current = target;
-              setSeekPreview(target);
-            }}
-            onPointerUp={(event) =>
-              commitSeekPreview(Number(event.currentTarget.value))
-            }
-            onKeyUp={(event) => {
-              if (
-                event.key.startsWith("Arrow") ||
-                event.key === "Home" ||
-                event.key === "End"
-              )
+          <div
+            className="player-seek-control"
+            onPointerMove={previewSeekThumbnail}
+            onPointerLeave={clearSeekThumbnail}
+          >
+            {seekThumbnail && (
+              <div
+                className="player-seek-thumbnail"
+                style={{ "--thumbnail-left": `${seekThumbnail.left * 100}%` } as CSSProperties}
+              >
+                <img src={seekThumbnail.image} alt="" />
+                <span>{formatTime(seekThumbnail.time)}</span>
+              </div>
+            )}
+            <input
+              aria-label="Seek"
+              type="range"
+              min="0"
+              max={seekLimit}
+              step="0.1"
+              value={Math.min(displayedTime, seekLimit)}
+              onChange={(event) => {
+                const target = Number(event.target.value);
+                seekPreviewRef.current = target;
+                setSeekPreview(target);
+              }}
+              onPointerUp={(event) =>
+                commitSeekPreview(Number(event.currentTarget.value))
+              }
+              onKeyUp={(event) => {
+                if (
+                  event.key.startsWith("Arrow") ||
+                  event.key === "Home" ||
+                  event.key === "End"
+                )
+                  commitSeekPreview(Number(event.currentTarget.value));
+              }}
+              onBlur={(event) => {
                 commitSeekPreview(Number(event.currentTarget.value));
-            }}
-            onBlur={(event) => {
-              commitSeekPreview(Number(event.currentTarget.value));
-            }}
-            style={
-              {
-                "--played": `${seekLimit ? (displayedTime / seekLimit) * 100 : 0}%`,
-              } as CSSProperties
-            }
-          />
+              }}
+              style={
+                {
+                  "--played": `${seekLimit ? (displayedTime / seekLimit) * 100 : 0}%`,
+                } as CSSProperties
+              }
+            />
+          </div>
           <span>{formatTime(duration)}</span>
         </div>
         <div className="player-control-row">
@@ -1841,8 +2669,6 @@ export function Player({
                 <SkipForward />
               </button>
             )}
-          </div>
-          <div className="player-control-group player-control-right">
             <button
               aria-label={muted ? "Unmute" : "Mute"}
               onClick={() => toggleMuted()}
@@ -1864,64 +2690,342 @@ export function Player({
                 } as CSSProperties
               }
             />
-            {(nativePlayer || platform.auth.companionSession) && (
-              <div className="audio-picker">
-                <button
-                  aria-label={t("player.subtitles")}
-                  className={subsOpen ? "active" : ""}
-                  aria-expanded={subsOpen}
-                  onClick={() => {
-                    setExternalPlayerOpen(false);
-                    setAudioOpen(false);
-                    setSubsOpen((value) => !value);
-                  }}
-                >
-                  <Captions />
-                </button>
-                {subsOpen && (
-                  <div className="audio-menu subtitle-menu">
-                    <strong>{t("player.subtitles")}</strong>
-                    {/* Always offered, even with no tracks: turning subtitles
-                        off is the thing most often wanted here, and it has to
-                        be reachable whatever the file contains. */}
-                    <button
-                      className={selectedSubtitle < 0 ? "selected" : ""}
-                      onClick={() => selectSubtitle(-1)}
-                    >
-                      {t("player.off")}
-                    </button>
-                    {visibleSubtitleTracks.map((track) => (
-                      <button
-                        key={track.id}
-                        className={selectedSubtitle === track.id ? "selected" : ""}
-                        onClick={() => selectSubtitle(track.id)}
-                      >
-                        {track.label}
-                      </button>
-                    ))}
-                    {!subtitleTracks.length && (
-                      <p>This source carries no subtitle tracks.</p>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
+          </div>
+          <div className="player-control-group player-control-right">
+            {/* One cog for everything that is a setting rather than an
+                action, laid out as a list you step into and back out of. It
+                was a button per setting along this bar, which does not grow:
+                every new option was another glyph to recognise. */}
             <div className="audio-picker">
               <button
-                aria-label={t("player.audioTrack")}
-                className={audioOpen ? "active" : ""}
-                aria-expanded={audioOpen}
+                aria-label={t("player.settings")}
+                title={t("player.settings")}
+                className={settingsPage ? "active" : ""}
+                aria-expanded={settingsPage !== null}
                 onClick={() => {
                   setExternalPlayerOpen(false);
-                  setSubsOpen(false);
-                  setAudioOpen((value) => !value);
+                  setSourcesOpen(false);
+                  setEpisodesOpen(false);
+                  setSettingsPage((page) => (page ? null : "root"));
                 }}
               >
-                <Music2 />
+                <Settings />
               </button>
-              {audioOpen && (
-                <div className="audio-menu">
-                  <strong>{t("player.audioTrack")}</strong>
+              {settingsPage === "root" && (
+                <div className="audio-menu settings-menu">
+                  {canPickSubtitles && (
+                    <button
+                      className="settings-row"
+                      onClick={() => setSettingsPage("captions")}
+                    >
+                      <span>
+                        <ClosedCaptionIcon />
+                        {t("player.subtitles")}
+                      </span>
+                      <em>
+                        {subtitleFileBusy ? "Loading…" : selectedSubtitleLabel}
+                        <ChevronRight />
+                      </em>
+                    </button>
+                  )}
+                  <button
+                    className="settings-row"
+                    onClick={() => setSettingsPage("audio")}
+                  >
+                    <span>
+                      <ListMusic />
+                      {t("player.audioTrack")}
+                    </span>
+                    <em>
+                      {selectedAudioLabel}
+                      <ChevronRight />
+                    </em>
+                  </button>
+                  {!nativePlayer && (
+                    <button
+                      className="settings-row"
+                      disabled={conversionActive}
+                      title={conversionActive ? "Server compatibility playback uses normal speed." : undefined}
+                      onClick={() => setSettingsPage("speed")}
+                    >
+                      <span>
+                        <Gauge />
+                        {t("player.playbackSpeed")}
+                      </span>
+                      <em>
+                        {formatPlaybackRate(conversionActive ? 1 : playbackRate)}
+                        <ChevronRight />
+                      </em>
+                    </button>
+                  )}
+                  {/* Switches, so they settle here rather than opening a page
+                      of two words. No explanation under either: a setting that
+                      needs a paragraph in a menu over a running picture is one
+                      nobody reads while watching. */}
+                  {!nativePlayer && (
+                    <label className="settings-row settings-switch">
+                      <span>
+                        <AudioLines />
+                        Stable Volume
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={stableVolume}
+                        disabled={!decoding}
+                        onChange={(event) => setStableVolume(event.target.checked)}
+                      />
+                    </label>
+                  )}
+                  {!nativePlayer && (
+                    <label className="settings-row settings-switch">
+                      <span>
+                        <HdIcon />
+                        HDR output
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={hdrEnabled}
+                        disabled={!hdrControlSupported || decoding}
+                        title={
+                          decoding
+                            ? "HDR output is unavailable during canvas playback."
+                            : undefined
+                        }
+                        onChange={(event) => setHdrEnabled(event.target.checked)}
+                      />
+                    </label>
+                  )}
+                </div>
+              )}
+              {settingsPage === "captions" && (
+                <div className="audio-menu settings-menu subtitle-menu">
+                  <button
+                    className="settings-back"
+                    onClick={() => setSettingsPage("root")}
+                  >
+                    <ChevronLeft />
+                    <strong>{t("player.subtitles")}</strong>
+                  </button>
+                  {/* How they look, next to which one is showing. Both are
+                      questions about the captions in front of you, and having
+                      to leave playback for the second one is why nobody ever
+                      found it. */}
+                  {onSubtitleStyle && (
+                    <button
+                      className="settings-row"
+                      onClick={() => setSettingsPage("captionStyle")}
+                    >
+                      <span>
+                        <SlidersHorizontal />
+                        {t("player.captionStyle")}
+                      </span>
+                      <em>
+                        <ChevronRight />
+                      </em>
+                    </button>
+                  )}
+                  {/* Always offered, even with no tracks: turning subtitles
+                      off is the thing most often wanted here, and it has to be
+                      reachable whatever the file contains. */}
+                  <button
+                    className={selectedSubtitle < 0 ? "selected" : ""}
+                    onClick={() => selectSubtitle(-1)}
+                  >
+                    {t("player.off")}
+                  </button>
+                  {nativePlayer
+                    ? visibleSubtitleTracks.map((track) => (
+                        <button
+                          key={track.id}
+                          className={selectedSubtitle === track.id ? "selected" : ""}
+                          onClick={() => selectSubtitle(track.id)}
+                        >
+                          {track.label}
+                        </button>
+                      ))
+                    : browserSubtitleGroups.map((group) => {
+                        const selected = group.tracks.some(
+                          (track) => track.id === selectedSubtitle,
+                        );
+                        if (group.tracks.length === 1) {
+                          const track = group.tracks[0];
+                          return (
+                            <button
+                              key={group.key}
+                              className={selected ? "selected" : ""}
+                              onClick={() => selectSubtitle(track.id)}
+                            >
+                              {group.label}
+                            </button>
+                          );
+                        }
+                        return (
+                          <button
+                            key={group.key}
+                            className={`settings-row${selected ? " selected" : ""}`}
+                            onClick={() => {
+                              setSubtitleGroupKey(group.key);
+                              setSettingsPage("captionVersions");
+                            }}
+                          >
+                            <span>{group.label}</span>
+                            <em>
+                              {group.tracks.length} versions
+                              <ChevronRight />
+                            </em>
+                          </button>
+                        );
+                      })}
+                  {subtitleIndexBusy ? (
+                    <p className="subtitle-loading"><LoaderCircle className="spin" /> Loading subtitles…</p>
+                  ) : !offeredSubtitleTracks.length ? (
+                    <p>No subtitle addon returned a track for this title.</p>
+                  ) : null}
+                </div>
+              )}
+              {settingsPage === "captionVersions" && openSubtitleGroup && (
+                <div className="audio-menu settings-menu subtitle-menu">
+                  <button
+                    className="settings-back"
+                    onClick={() => setSettingsPage("captions")}
+                  >
+                    <ChevronLeft />
+                    <strong>{openSubtitleGroup.label}</strong>
+                  </button>
+                  {openSubtitleGroup.tracks.map((track) => (
+                    <button
+                      key={track.id}
+                      className={selectedSubtitle === track.id ? "selected" : ""}
+                      onClick={() => selectSubtitle(track.id)}
+                    >
+                      {track.variantLabel}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {settingsPage === "captionStyle" && (
+                <div className="audio-menu settings-menu caption-style-menu">
+                  <button
+                    className="settings-back"
+                    onClick={() => setSettingsPage("captions")}
+                  >
+                    <ChevronLeft />
+                    <strong>{t("player.captionStyle")}</strong>
+                  </button>
+                  {/* Live, on the captions actually on screen. The stored
+                      values are the ones Settings edits, so this is the same
+                      preference reached from where you can see its effect. */}
+                  {/* The style rides on the line, not the box: the box is a
+                      checked ground, and a transparent caption background has
+                      to be seen through to mean anything. */}
+                  <p className="caption-style-preview">
+                    <span style={cuePreviewStyle}>The quick brown fox</span>
+                  </p>
+                  <div className="settings-row caption-style-step">
+                    <span>Text size</span>
+                    <em>
+                      <button
+                        aria-label="Smaller text"
+                        disabled={settings.subtitleFontSizeSp <= CAPTION_SIZE_MIN}
+                        onClick={() => stepCaptionSize(-2)}
+                      >
+                        <Minus />
+                      </button>
+                      <i>{settings.subtitleFontSizeSp}</i>
+                      <button
+                        aria-label="Larger text"
+                        disabled={settings.subtitleFontSizeSp >= CAPTION_SIZE_MAX}
+                        onClick={() => stepCaptionSize(2)}
+                      >
+                        <Plus />
+                      </button>
+                    </em>
+                  </div>
+                  <div className="settings-row caption-style-step">
+                    <span>Position</span>
+                    <em>
+                      <button
+                        aria-label="Lower"
+                        disabled={settings.subtitleBottomOffset <= 0}
+                        onClick={() => stepCaptionOffset(-5)}
+                      >
+                        <Minus />
+                      </button>
+                      <i>{settings.subtitleBottomOffset}</i>
+                      <button
+                        aria-label="Higher"
+                        disabled={settings.subtitleBottomOffset >= CAPTION_OFFSET_MAX}
+                        onClick={() => stepCaptionOffset(5)}
+                      >
+                        <Plus />
+                      </button>
+                    </em>
+                  </div>
+                  <div className="caption-style-swatches">
+                    <small>Text colour</small>
+                    <div>
+                      {CAPTION_COLORS.map((option) => (
+                        <button
+                          key={option.value}
+                          title={option.name}
+                          aria-label={option.name}
+                          aria-pressed={sameColor(settings.subtitleTextColor, option.value)}
+                          className={sameColor(settings.subtitleTextColor, option.value) ? "selected" : ""}
+                          style={{ "--swatch": browserColor(option.value, "#fff") } as CSSProperties}
+                          onClick={() => onSubtitleStyle?.({ subtitleTextColor: option.value })}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <div className="caption-style-swatches">
+                    <small>Background</small>
+                    <div>
+                      {CAPTION_BACKGROUNDS.map((option) => (
+                        <button
+                          key={option.value}
+                          title={option.name}
+                          aria-label={option.name}
+                          aria-pressed={sameColor(settings.subtitleBackgroundColor, option.value)}
+                          className={`${sameColor(settings.subtitleBackgroundColor, option.value) ? "selected" : ""}${option.value.startsWith("#00") ? " is-none" : ""}`}
+                          style={{ "--swatch": browserColor(option.value, "transparent") } as CSSProperties}
+                          onClick={() => onSubtitleStyle?.({ subtitleBackgroundColor: option.value })}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                  <label className="settings-row settings-switch">
+                    <span>Outline</span>
+                    <input
+                      type="checkbox"
+                      checked={settings.subtitleOutlineEnabled}
+                      onChange={(event) =>
+                        onSubtitleStyle?.({
+                          subtitleOutlineEnabled: event.target.checked,
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="settings-row settings-switch">
+                    <span>Bold</span>
+                    <input
+                      type="checkbox"
+                      checked={settings.subtitleBold}
+                      onChange={(event) =>
+                        onSubtitleStyle?.({ subtitleBold: event.target.checked })
+                      }
+                    />
+                  </label>
+                </div>
+              )}
+              {settingsPage === "audio" && (
+                <div className="audio-menu settings-menu subtitle-menu">
+                  <button
+                    className="settings-back"
+                    onClick={() => setSettingsPage("root")}
+                  >
+                    <ChevronLeft />
+                    <strong>{t("player.audioTrack")}</strong>
+                  </button>
                   {audioTracks.length ? (
                     audioTracks.map((track) => (
                       <button
@@ -1942,22 +3046,42 @@ export function Player({
                       stays silent.
                     </small>
                   )}
-                  {!nativePlayer && navigableExternalUrl && (
-                    <a href={navigableExternalUrl} target="_blank" rel="noopener noreferrer">
-                      <ExternalLink /> Open externally
-                    </a>
-                  )}
+                </div>
+              )}
+              {settingsPage === "speed" && (
+                <div className="audio-menu settings-menu subtitle-menu">
+                  <button
+                    className="settings-back"
+                    onClick={() => setSettingsPage("root")}
+                  >
+                    <ChevronLeft />
+                    <strong>{t("player.playbackSpeed")}</strong>
+                  </button>
+                  {PLAYBACK_RATES.map((rate) => (
+                    <button
+                      key={rate}
+                      className={(conversionActive ? 1 : playbackRate) === rate ? "selected" : ""}
+                      disabled={conversionActive && rate !== 1}
+                      onClick={() => {
+                        setPlaybackRate(rate);
+                        setSettingsPage(null);
+                      }}
+                    >
+                      {formatPlaybackRate(rate)}
+                    </button>
+                  ))}
                 </div>
               )}
             </div>
-            {!nativePlayer && externalUrl && !!platform.externalPlayer.options("player").length && (
+            {!nativePlayer && externalUrl && !!handoffOptions().length && (
               <div className="external-player-picker">
                 <button
                   className={externalPlayerOpen ? "active" : ""}
                   aria-label="Open in external player"
                   aria-expanded={externalPlayerOpen}
                   onClick={() => {
-                    setAudioOpen(false);
+                    setSettingsPage(null);
+                    setSourcesOpen(false);
                     setExternalPlayerOpen((value) => !value);
                   }}
                 >
@@ -1966,7 +3090,7 @@ export function Player({
                 {externalPlayerOpen && (
                   <div className="external-player-menu">
                     <strong>Open with</strong>
-                    {platform.externalPlayer.options("player").map((option) => (
+                    {handoffOptions().map((option) => (
                       <button
                         key={option.mode}
                         onClick={() => openExternalPlayer(option.mode)}
@@ -1978,18 +3102,40 @@ export function Player({
                 )}
               </div>
             )}
+            {/* Swapping release without going back to the sheet: only offered
+                where the app can actually resolve another one. */}
+            {onSelectSource && (
+              <button
+                aria-label="Sources"
+                title="Sources"
+                className={sourcesOpen ? "active" : ""}
+                aria-expanded={sourcesOpen}
+                onClick={() => {
+                  setSettingsPage(null);
+                  setExternalPlayerOpen(false);
+                  setEpisodesOpen(false);
+                  // Asked for on the first look rather than with every
+                  // stream: most playback never opens this.
+                  if (!sourcesOpen && !sources?.length) onRequestSources?.();
+                  setSourcesOpen((value) => !value);
+                }}
+              >
+                <SourceSwapIcon />
+              </button>
+            )}
             {!!episodes?.length && onPlayEpisode && (
               <button
                 aria-label={t("player.episodes")}
                 className={episodesOpen ? "active" : ""}
                 aria-expanded={episodesOpen}
                 onClick={() => {
-                  setAudioOpen(false);
+                  setSettingsPage(null);
                   setExternalPlayerOpen(false);
+                  setSourcesOpen(false);
                   setEpisodesOpen((value) => !value);
                 }}
               >
-                <List />
+                <ListVideo />
               </button>
             )}
             {/* Only where the picture can actually be rescaled: CSS does it for
@@ -2070,6 +3216,88 @@ export function Player({
           </button>
         </div>
       )}
+      {sourcesOpen && onSelectSource && (
+        /* The sheet's own list, in the middle of the picture. It was a menu
+           in the corner of the controls first, which is the right shape for
+           picking an audio track and the wrong one for reading release names:
+           they run long, carry badges, and there can be forty of them. */
+        <div
+          className="player-sources-scrim"
+          onClick={() => setSourcesOpen(false)}
+        >
+          <section
+            className="player-sources"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Sources"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <header>
+              <div>
+                <span className="eyebrow">SOURCES</span>
+                <strong>{video?.title || meta.name}</strong>
+              </div>
+              <button
+                className="circle-button"
+                aria-label={t("action.close")}
+                onClick={() => setSourcesOpen(false)}
+              >
+                <X />
+              </button>
+            </header>
+            <div className="source-list">
+              {sources?.map((item) => {
+                const current = sourceKey(item) === sourceKey(stream);
+                return (
+                  <article
+                    key={sourceKey(item)}
+                    className={current ? "is-playing" : undefined}
+                  >
+                    <button
+                      className="source-main"
+                      disabled={current || switching}
+                      onClick={() => startSource(item)}
+                    >
+                      <span>
+                        {item.addonLogo ? (
+                          <img src={item.addonLogo} alt="" />
+                        ) : (
+                          <Play size={18} />
+                        )}
+                      </span>
+                      <div>
+                        {streamBadgeSettings?.placement === "TOP" && (
+                          <SourceBadges stream={item} settings={streamBadgeSettings} />
+                        )}
+                        <strong>{item.name || item.addonName}</strong>
+                        <p>{sourceLabel(item)}</p>
+                        <small>
+                          {item.addonName}
+                          {current ? " · Playing now" : ""}
+                        </small>
+                        {streamBadgeSettings?.placement === "BOTTOM" && (
+                          <SourceBadges stream={item} settings={streamBadgeSettings} />
+                        )}
+                      </div>
+                    </button>
+                  </article>
+                );
+              })}
+              {sourcesBusy && (
+                <div className="source-pending" role="status">
+                  <i className="mini-spinner" aria-hidden="true" />
+                  <span>{t("sources.fetching")}</span>
+                </div>
+              )}
+              {!sourcesBusy && !sources?.length && (
+                <div className="source-pending">
+                  No other releases came back for this.
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
       {episodesOpen && !!episodes?.length && (
         <div
           className="player-episodes-scrim"
@@ -2098,7 +3326,7 @@ export function Player({
             </header>
             <label className="season-select-wrap">
               <span>SEASON</span>
-              <select
+              <Select
                 value={season ?? ""}
                 onChange={(event) => setSeason(Number(event.target.value))}
               >
@@ -2107,7 +3335,7 @@ export function Player({
                     {value === 0 ? "Specials" : `Season ${value}`}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
             <div className="episode-list-heading">
               <strong>
@@ -2118,13 +3346,16 @@ export function Player({
                 {seasonEpisodes.length === 1 ? "episode" : "episodes"}
               </span>
             </div>
-            <div className="player-episode-list episode-list is-detailed">
+            <div
+              className={`player-episode-list episode-list is-${episodeCardStyle}`}
+            >
               {seasonEpisodes.map((item) => {
                 const key = watchKey(meta.id, item.season, item.episode);
                 return (
                   <EpisodeRow
                     key={item.id}
                     video={item}
+                    rating={episodeRatings.get(`${item.season}:${item.episode}`)}
                     watched={watchIndex?.watched.has(key) ?? false}
                     percent={watchIndex ? episodePercent(watchIndex, key) : 0}
                     remaining={watchIndex ? remainingShort(watchIndex, key) : ""}
@@ -2136,6 +3367,14 @@ export function Player({
               })}
             </div>
           </aside>
+        </div>
+      )}
+      {notice && !error && (
+        <div className="player-notice" role="status">
+          <span>{notice}</span>
+          <button type="button" onClick={() => setNotice("")}>
+            {t("common.dismiss")}
+          </button>
         </div>
       )}
       {error && (
@@ -2168,11 +3407,11 @@ export function Player({
           {/* What can play it, offered where it failed. Being told the
               browser cannot decode something is only half an answer; the other
               half is the list of things that can. */}
-          {!nativePlayer && externalUrl && !!platform.externalPlayer.options("player").length && (
+          {!nativePlayer && externalUrl && !!handoffOptions().length && (
             <div className="player-error-players">
               <small>Play it in</small>
               <div>
-                {platform.externalPlayer.options("player").map((option) => (
+                {handoffOptions().map((option) => (
                   <button
                     key={option.mode}
                     onClick={() => openExternalPlayer(option.mode)}

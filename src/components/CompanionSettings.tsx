@@ -3,6 +3,7 @@ import { t } from "../lib/i18n.ts";
 import { browserCapabilities, companionRequest, playbackDiagnostics, readCompanionPreferences, saveCompanionPreferences } from "../lib/companionClient.ts";
 import type { PlaybackPreferences } from "../lib/companionPolicy.ts";
 import { copyText } from "../lib/copyText.ts";
+import { Select } from "./Select";
 
 export function CompanionSettings() {
   const [preferences, setPreferences] = useState(readCompanionPreferences);
@@ -26,14 +27,14 @@ export function CompanionSettings() {
   return <div className="setting-card settings-category-card">
     <header><h2>{t("companion.title")}</h2><span>{t("companion.local")}</span></header>
     <label className="setting-select-row"><span><strong>{t("companion.preference")}</strong><small>{t("companion.automaticDescription")}</small></span>
-      <select value={preferences.mode} onChange={(e) => update({ ...preferences, mode: e.target.value as PlaybackPreferences["mode"] })}>
+      <Select value={preferences.mode} onChange={(e) => update({ ...preferences, mode: e.target.value as PlaybackPreferences["mode"] })}>
         <option value="automatic">{t("companion.automatic")}</option><option value="direct">{t("companion.preferDirect")}</option><option value="compatibility">{t("companion.compatibility")}</option>
-      </select>
+      </Select>
     </label>
     <label className="setting-select-row"><span><strong>{t("companion.resolution")}</strong><small>{t("companion.resolutionDescription")}</small></span>
-      <select value={preferences.resolution} onChange={(e) => update({ ...preferences, resolution: e.target.value as PlaybackPreferences["resolution"] })}>
+      <Select value={preferences.resolution} onChange={(e) => update({ ...preferences, resolution: e.target.value as PlaybackPreferences["resolution"] })}>
         <option value="original">{t("companion.original")}</option><option value="1080">1080p</option><option value="720">720p</option>
-      </select>
+      </Select>
     </label>
     <p role="status">{health || t("common.loading")}</p>
     <button className="secondary" aria-expanded={!!diagnostics} onClick={() => void inspect()}>{t("companion.diagnostics")}</button>

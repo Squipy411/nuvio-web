@@ -141,8 +141,8 @@ a {
   left: 0;
   right: 0;
   z-index: 40;
-  background: #14181d;
-  border: 1px solid #292f36;
+  background: var(--episodes-raised);
+  border: 1px solid var(--episodes-field-line);
   border-radius: 14px;
   padding: 6px;
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
@@ -165,7 +165,7 @@ a {
   border-radius: 10px;
 }
 .search-history-row:hover {
-  background: #1d2228;
+  background: var(--episodes-hover);
 }
 /* Overrides the submit button's chip styling, which reaches every button
    inside the form. */
@@ -592,47 +592,13 @@ a {
   margin: 0 0 26px;
   overflow: hidden;
 }
-.search-result-groups > .media-section + .media-section,
-.search-result-groups > .media-section + .search-result-group,
-.search-result-groups > .search-result-group + .media-section {
+.search-result-groups > .media-section + .media-section {
   margin-top: 0;
 }
 .search-result-groups .media-row {
   width: 100%;
   min-width: 0;
   max-width: 100%;
-}
-.search-result-group > header {
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 16px;
-}
-.search-result-group.is-empty {
-  width: 100%;
-  min-width: 0;
-  margin: 0 0 26px;
-}
-.search-result-group h2 {
-  margin: 0 0 4px;
-  font-size: 25px;
-}
-.search-result-group header span {
-  color: #8d97a2;
-  font-size: 13px;
-}
-.search-result-group header > strong {
-  color: #8d97a2;
-  font-size: 13px;
-}
-.search-result-group .poster-grid {
-  margin-top: 16px;
-}
-.search-group-empty {
-  grid-column: 1 / -1;
-  padding: 18px 0;
-  color: #737e89;
-  font-size: 14px;
 }
 .back-inline {
   border: 0;
@@ -871,7 +837,7 @@ a {
   position: fixed;
   z-index: 0;
   inset: 0;
-  background-position: center;
+  background-position: top center;
   background-size: cover;
   filter: saturate(0.86);
   pointer-events: none;
@@ -884,7 +850,7 @@ a {
   .detail-view.background-cinematic .detail-page-backdrop {
     display: none;
   }
-  .detail-view.background-cinematic .detail-hero {
+  .detail-view.background-cinematic .detail-hero::before {
     background-image:
       linear-gradient(
         90deg,
@@ -902,12 +868,22 @@ a {
     background-color: var(--app-bg);
   }
   .detail-view.background-cinematic .detail-sections {
-    background: var(--app-bg);
+    background: transparent;
   }
-  .detail-hero {
-    min-height: min(720px, 82vh);
+  .detail-view .detail-hero {
+    --detail-hero-height: min(720px, 82vh);
+    min-height: var(--detail-hero-height);
     align-items: center;
     padding: 92px 7vw 58px;
+  }
+  /* A backdrop is normally 16:9. Let its own full-width ratio determine how
+     far it runs down the page instead of cropping it into the content-height
+     hero box. The overflow deliberately continues behind credits and cast. */
+  .detail-view .detail-hero::before {
+    height: auto;
+    min-height: var(--detail-hero-height);
+    aspect-ratio: 16 / 9;
+    background-size: 100% 100%, 100% 100%, 100% auto;
   }
   .detail-copy {
     display: flex;
@@ -1071,12 +1047,32 @@ a {
   font-weight: 800;
 }
 .detail-hero {
-  min-height: 680px;
-  background-size: cover;
-  background-position: center;
+  --detail-hero-height: 680px;
+  --detail-art-height: 680px;
+  position: relative;
+  isolation: isolate;
+  min-height: var(--detail-hero-height);
+  background-image: none;
   display: flex;
   align-items: flex-end;
   padding: 100px 7vw 74px;
+}
+.detail-hero::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: var(--detail-art-height);
+  background-image:
+    linear-gradient(90deg, rgba(5,7,9,.98), rgba(5,7,9,.38)),
+    linear-gradient(0deg, var(--detail-fade-color, #080a0d), transparent 60%),
+    var(--detail-backdrop, none);
+  background-position: top center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  pointer-events: none;
 }
 .detail-copy {
   max-width: 780px;
@@ -1125,6 +1121,39 @@ a {
 .episodes header select {
   margin-bottom: 18px;
 }
+.episode-header-controls {
+  display: flex;
+  align-items: end;
+  gap: 9px;
+}
+.episode-random-button {
+  display: inline-grid;
+  flex: none;
+  width: 45px;
+  height: 45px;
+  place-items: center;
+  margin-bottom: 18px;
+  border: 1px solid #30373f;
+  border-radius: 50%;
+  background: #1b2025;
+  color: #f2f5f8;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
+}
+.episode-random-button:hover,
+.episode-random-button:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 70%, #30373f);
+  background: color-mix(in srgb, var(--accent) 16%, #1b2025);
+  color: var(--accent);
+}
+.episode-random-button:disabled {
+  opacity: .4;
+  cursor: default;
+}
+.episode-random-button svg {
+  width: 20px;
+  height: 20px;
+}
 .episodes h2,
 .cast h2 {
   margin: 5px 0 18px;
@@ -1140,7 +1169,18 @@ a {
 }
 .episode-list {
   display: grid;
+  /* A short season inside the fixed-height desktop panel must leave empty
+     space below it. Grid's default `align-content: stretch` distributed that
+     space through the rendered virtual rows, turning a few episodes into huge
+     cards and then teaching the virtualizer that the huge size was normal. */
+  align-content: start;
+  grid-auto-rows: max-content;
   gap: 10px;
+}
+.episode-list-spacer {
+  grid-column: 1 / -1;
+  width: 100%;
+  pointer-events: none;
 }
 
 /* Content & Discovery: plugin repositories intentionally share the visual
@@ -1717,6 +1757,13 @@ a {
     padding-inline: 0;
     background: none;
     border-bottom: 0;
+    /* The blur goes with the fill, for the same reason: there is nothing
+       passing under this header to soften, so all it did was smear the
+       artwork behind a strip of the screen. It also made this header a
+       containing block for fixed-position children, which is what pinned the
+       back button 22px from the header instead of from the sheet. */
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 }
 /* Dimmed while the addons are being asked, so a second press is plainly not
@@ -1739,11 +1786,24 @@ a {
 .continue-entry-brand > h2 { grid-area: 1 / 1; }
 .continue-entry-brand > img { max-width: 100%; max-height: 140px; object-fit: contain; }
 .continue-entry-brand > h2 { margin: 0; color: var(--text); font-size: clamp(22px, 4vw, 32px); text-align: center; }
-.source-sheet-desktop-close { display: none; }
+/* Beside the artwork the header belongs to the list column, which starts
+   halfway across the window — so an arrow leading that row sat in the middle
+   of the screen. Out of the row and onto the sheet itself, at the corner every
+   other screen keeps its way back, at the same offsets they use. */
 @media (min-width: 1000px) {
-  .source-sheet-mobile-back { display: none; }
-  .source-sheet-desktop-close { display: grid; place-items: center; flex: 0 0 auto; order: 3; }
-  .source-sheet-refresh { order: -1; flex: 0 0 auto; }
+  /* Fixed rather than absolute: this button sits inside the sticky header, and
+     a sticky element is a containing block for an absolutely positioned child
+     — which pinned it 22px from the header's own left edge, halfway across the
+     window, instead of the sheet's. Sticky does not capture fixed. The sheet
+     fills the backdrop and covers the viewport, so this lands in the same
+     corner either way. */
+  .source-sheet-back {
+    position: fixed;
+    z-index: 3;
+    top: max(22px, env(safe-area-inset-top));
+    left: max(22px, env(safe-area-inset-left));
+  }
+  .source-sheet-refresh { flex: 0 0 auto; }
 }
 
 .player-diagnostics {
@@ -1755,53 +1815,61 @@ a {
   max-height: calc(100% - 180px);
   overflow-y: auto;
   padding: 18px;
-  border: 1px solid var(--panel-border);
+  border: 1px solid var(--episodes-line);
   border-radius: 20px;
-  background: var(--app-bg, #080a0d);
+  background: var(--episodes-bg);
   color: var(--text);
   font-size: 14px;
 }
 .player-diagnostics header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.player-diagnostics header button { display: grid; place-items: center; padding: 8px; border-radius: 50%; background: var(--panel-soft); color: inherit; }
+.player-diagnostics header button { display: grid; place-items: center; padding: 8px; border-radius: 50%; background: var(--episodes-field); color: inherit; }
 .player-diagnostics dl { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .player-diagnostics dt, .player-diagnostics p { color: var(--muted); }
 .player-diagnostics dd { margin: 0; overflow-wrap: anywhere; }
 .player-diagnostics p { line-height: 1.5; margin-bottom: 0; }
-/* The title takes the slack so the pickers and the way out stay together on
-   the right, and both halves may shrink rather than wrapping into height the
-   pinned header would then keep for the whole scroll. */
+/* Keep navigation beside the title, then give the filters a full row of their
+   own. Long show names can now ellipsise without pushing either picker or the
+   refresh action outside the sheet. */
+.source-column > header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+}
 .source-column > header > :first-child {
-  flex: 1 1 auto;
+  grid-column: 2;
+  grid-row: 1;
   min-width: 0;
 }
 .source-sheet-tools {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  width: 100%;
   min-width: 0;
 }
-/* Two pickers and a close button do not fit a phone on one line — they put
-   the X off the side of the screen, which is the only way out of here. The
-   title keeps the X beside it and the pickers take the row below. */
-@media (max-width: 999px) {
-  .source-column > header {
-    flex-wrap: wrap;
-    row-gap: 10px;
-  }
-  /* Leading the row, like the back arrow on every other screen. It sat at the
-     end because it was an X, and an X belongs in the corner it closes from —
-     a back arrow does not. */
-  .source-sheet-back {
-    order: -1;
-  }
+/* Leading the row at every width, like the back arrow on every other screen.
+   It was an X in the far corner on a desktop and an arrow at the start on a
+   phone, so the same sheet had two different ways out depending on the size of
+   the window. An X belongs in the corner it closes from; a back arrow does
+   not, and this sheet is a place you go back from. */
+.source-sheet-back {
+  grid-column: 1;
+  grid-row: 1;
+}
+.source-sheet-refresh {
+  grid-column: 3;
+  grid-row: 1;
+}
+.source-sheet-tools .source-player,
+.source-sheet-tools select {
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+}
+@media (max-width: 520px) {
   .source-sheet-tools {
-    order: 1;
-    flex: 1 0 100%;
-  }
-  .source-sheet-tools .source-player {
-    flex: 1 1 0;
-    min-width: 0;
-  }
-  .source-sheet-tools select {
-    min-width: 0;
-    width: 100%;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 .source-sheet h2 {
@@ -1960,6 +2028,37 @@ a {
   background: #15191ddd;
   padding: 12px 16px;
   border-radius: 12px;
+}
+/* Playback is working; something about it is not. The error panel says the
+   opposite — "unavailable" — so this is its own thing: a line above the
+   controls, dismissible, that does not take the screen. */
+.player-notice {
+  position: absolute;
+  left: 50%;
+  bottom: 120px;
+  transform: translateX(-50%);
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  max-width: min(640px, calc(100% - 32px));
+  padding: 12px 16px;
+  border: 1px solid var(--panel-border);
+  border-radius: 14px;
+  background: rgb(6 8 11 / 0.92);
+  color: var(--text, #f5f7f8);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.player-notice button {
+  flex: none;
+  border: 0;
+  border-radius: 10px;
+  padding: 7px 12px;
+  background: #20252b;
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
 }
 .player-error {
   /* Centred on the player rather than left wherever flow put it. */
@@ -2689,9 +2788,10 @@ a {
     width: 100%;
   }
   .detail-hero {
-    min-height: 610px;
+    --detail-hero-height: 610px;
+    --detail-art-height: 610px;
+    min-height: var(--detail-hero-height);
     padding: 105px 20px 42px;
-    background-position: 65% center;
   }
   .detail-copy h1 {
     font-size: 44px;
@@ -2843,6 +2943,18 @@ a {
   --panel-bg: #0c0f13;
   --panel-soft: #12161b;
   --panel-border: #232930;
+  /* The episodes panel's own near-black, named because the player borrows it.
+     Its episode list and its menus are the same furniture seen over a picture
+     instead of over a page, and painting them from a second, greyer palette
+     made playback look like a different application. */
+  --episodes-bg: #030304;
+  --episodes-line: #1a1b1e;
+  /* Inset surfaces on that ground: the season select, the speed buttons. */
+  --episodes-field: #0a0a0b;
+  --episodes-field-line: #232428;
+  --episodes-hover: #17181b;
+  /* Cards resting on it: an episode row, the search history popover. */
+  --episodes-raised: #0b0b0c;
 }
 :root[data-theme="amoled"] {
   --app-bg: #000;
@@ -3010,6 +3122,39 @@ html.native-player-active.native-player-covered .player-view.native-player {
   background: #000;
   object-position: center center;
 }
+.player-subtitle-overlay {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  width: min(88%, 1100px);
+  transform: translateX(-50%);
+  text-align: center;
+  white-space: pre-line;
+  line-height: 1.35;
+  pointer-events: none;
+  transition: bottom 0.2s ease;
+}
+.player-subtitle-overlay > span {
+  padding: 2px 5px;
+  border-radius: 3px;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+.subtitle-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.subtitle-loading svg {
+  width: 17px;
+  height: 17px;
+}
+/* New HDR-aware browsers can deliberately cap an HDR surface at reference
+   white. Older browsers ignore this declaration and continue using their own
+   color-management path. */
+.player-hdr-limited {
+  dynamic-range-limit: standard;
+}
 /*
  * Audible HTML video is surfaced by iOS in Dynamic Island/Now Playing and the
  * web cannot suppress that system indicator. Keep moving picture content out
@@ -3050,9 +3195,9 @@ html.native-player-active.native-player-covered .player-view.native-player {
   background: none;
   transition: opacity 0.2s ease;
 }
-/* The glyph alone, larger. A filled circle in the middle of the picture is a
-   lot of furniture for a control that is only a hint — a drop shadow separates
-   it from a bright scene without covering any of it. */
+/* The accent glyph on a solid black disc: it only ever shows while paused, and
+   a still frame can be any colour at all under it. Opaque rather than tinted,
+   so the glyph never has to compete with whatever it is resting on. */
 .player-center {
   position: absolute;
   z-index: 3;
@@ -3062,9 +3207,10 @@ html.native-player-active.native-player-covered .player-view.native-player {
   height: 96px;
   transform: translate(-50%, -50%);
   border: 0;
-  background: none;
+  border-radius: 50%;
+  background: #000;
   color: var(--accent);
-  filter: drop-shadow(0 2px 14px #000c);
+  box-shadow: 0 10px 34px #000a;
   display: grid;
   place-items: center;
   cursor: pointer;
@@ -3075,8 +3221,12 @@ html.native-player-active.native-player-covered .player-view.native-player {
 .player-center:hover {
   transform: translate(-50%, -50%) scale(1.05);
 }
+/* The spinner is not a button and takes no disc — a black circle around a
+   loading ring would read as something to press. */
 .player-center-busy {
   pointer-events: none;
+  background: none;
+  box-shadow: none;
 }
 .player-center-busy:hover {
   transform: translate(-50%, -50%);
@@ -3118,6 +3268,41 @@ html.native-player-active.native-player-covered .player-view.native-player {
 }
 .player-timeline span:last-child {
   text-align: right;
+}
+.player-seek-control {
+  position: relative;
+  min-width: 0;
+}
+.player-seek-control > input {
+  width: 100%;
+}
+.player-seek-thumbnail {
+  position: absolute;
+  z-index: 2;
+  left: clamp(80px, var(--thumbnail-left), calc(100% - 80px));
+  bottom: 28px;
+  width: 160px;
+  overflow: hidden;
+  border: 1px solid #ffffff30;
+  border-radius: 10px;
+  background: #050607;
+  box-shadow: 0 10px 30px #000c;
+  pointer-events: none;
+  transform: translateX(-50%);
+}
+.player-seek-thumbnail img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  object-fit: cover;
+}
+.player-seek-thumbnail span {
+  display: block;
+  padding: 4px 7px 5px;
+  color: #fff;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: center !important;
 }
 .player-view input[type="range"] {
   appearance: none;
@@ -3237,6 +3422,8 @@ html.native-player-active.native-player-covered .player-view.native-player {
   overscroll-behavior: none;
   scrollbar-width: thin;
 }
+/* The episodes panel's ground, a shade off opaque so a bright frame still
+   shows through the edges of a menu resting on it. */
 .audio-menu,
 .external-player-menu {
   position: absolute;
@@ -3244,8 +3431,8 @@ html.native-player-active.native-player-covered .player-view.native-player {
   bottom: 56px;
   width: min(330px, calc(100vw - 30px));
   padding: 14px;
-  background: #101419fa;
-  border: 1px solid #343b43;
+  background: color-mix(in srgb, var(--episodes-bg) 97%, transparent);
+  border: 1px solid var(--episodes-line);
   border-radius: 16px;
   box-shadow: 0 18px 50px #000b;
   display: grid;
@@ -3270,13 +3457,129 @@ html.native-player-active.native-player-covered .player-view.native-player {
    a touch device has none, and the selected row keeps its own fill. */
 .audio-menu > button:not(.selected):hover,
 .external-player-menu > button:hover {
-  background: #343b43;
+  background: var(--episodes-hover);
 }
 .audio-menu p,
 .audio-menu small {
   margin: 3px 7px;
   color: #a4adb7;
   line-height: 1.45;
+}
+/* ---- The player's source picker ---------------------------------------- */
+/* A panel in the middle of the picture rather than a menu in the corner of
+   the controls: these are the sheet's rows, and they run long, carry badges,
+   and there can be forty of them. */
+.player-sources-scrim {
+  position: absolute;
+  z-index: 6;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: max(20px, env(safe-area-inset-top)) 16px
+    max(20px, env(safe-area-inset-bottom));
+  background: #0009;
+  -webkit-backdrop-filter: blur(10px) saturate(1.05);
+  backdrop-filter: blur(10px) saturate(1.05);
+}
+.player-sources {
+  display: flex;
+  flex-direction: column;
+  width: min(680px, 100%);
+  max-height: 100%;
+  min-height: 0;
+  padding: 20px 20px 6px;
+  border: 1px solid var(--episodes-line);
+  border-radius: 22px;
+  background: var(--episodes-bg);
+  box-shadow: 0 28px 90px #000c;
+  animation: player-sources-in 0.16s ease-out;
+}
+@keyframes player-sources-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .player-sources {
+    animation: none;
+  }
+}
+.player-sources > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+.player-sources > header strong {
+  display: block;
+  overflow: hidden;
+  font-size: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The list is the scroller, so the heading stays put through forty rows.
+   Content-sized rows for the same reason the sheet's list needs them: a grid
+   handed a definite height divides it between its auto rows, which squashed
+   every card to a quarter of the panel and clipped the release name. */
+.player-sources > .source-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  align-content: start;
+  grid-auto-rows: max-content;
+  margin-top: 16px;
+  padding-bottom: 14px;
+  overflow-y: auto;
+  overscroll-behavior: none;
+  scrollbar-color: #34353a #080809;
+  scrollbar-width: thin;
+}
+/* The sheet's cards read as white-on-blur; on this ground they need their own
+   fill, or they disappear into it. */
+.player-sources .source-list article {
+  border-color: var(--episodes-field-line);
+  background: var(--episodes-raised);
+}
+@media (hover: hover) and (pointer: fine) {
+  .player-sources .source-list article:hover {
+    border-color: #33343a;
+    background: var(--episodes-hover);
+  }
+}
+/* What is playing: named in its own row rather than pinned above the list, so
+   there is one of everything and the order stays the addons' own. */
+.player-sources .source-list article.is-playing {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  background: color-mix(in srgb, var(--accent) 13%, var(--episodes-raised));
+}
+.player-sources .source-list article.is-playing .source-main {
+  cursor: default;
+}
+.player-sources .source-list article.is-playing small {
+  color: var(--accent);
+}
+.player-sources .source-main:disabled {
+  cursor: default;
+}
+.player-sources .source-main > span svg {
+  width: 17px;
+  height: 17px;
+  color: #aeb7c0;
+}
+@media (max-width: 760px) {
+  .player-sources {
+    width: 100%;
+    padding: 16px 14px 4px;
+    border-radius: 18px;
+  }
+  .player-sources > header strong {
+    font-size: 16px;
+  }
 }
 .audio-menu a {
   display: flex;
@@ -3285,11 +3588,367 @@ html.native-player-active.native-player-covered .player-view.native-player {
   margin-top: 4px;
   padding: 10px;
   border-radius: 9px;
-  background: #262c33;
+  background: var(--episodes-field);
+  border: 1px solid var(--episodes-field-line);
   text-decoration: none;
 }
 .audio-menu a svg {
   width: 17px;
+}
+/* ---- The settings cog -------------------------------------------------- */
+/* A list you step into and back out of, in one panel, rather than a button
+   per setting along the control bar. */
+.settings-menu {
+  width: min(340px, calc(100vw - 30px));
+  max-height: min(64vh, 440px);
+  overflow-y: auto;
+  overscroll-behavior: none;
+  scrollbar-width: thin;
+  gap: 2px;
+}
+/* Name on the left, what it is set to on the right — so the list answers what
+   everything is without opening anything. */
+.player-control-group .settings-menu > .settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  min-height: 44px;
+  height: auto;
+  padding: 8px 10px;
+  border-radius: 9px;
+  text-align: left;
+  cursor: pointer;
+}
+/* A glyph then the name, so a row is recognisable at a glance rather than
+   only by reading it — which is what a menu opened mid-scene is for. */
+.settings-menu > .settings-row > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-menu > .settings-row > span > svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  color: #97a1ac;
+}
+/* Lit with the row it belongs to, so a switch that is on reads as on from its
+   icon as well as from its track. */
+.settings-switch:has(input:checked) > span > svg {
+  color: var(--accent);
+}
+.settings-menu > .settings-row > em {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: #97a1ac;
+  font-size: 12px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-menu > .settings-row > em svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+}
+.player-control-group .settings-menu > .settings-row:hover {
+  background: var(--episodes-hover);
+}
+/* The heading of a page, and the way back out of it. */
+.player-control-group .settings-menu > .settings-back {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  min-height: 40px;
+  height: auto;
+  margin-bottom: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--episodes-field-line);
+  border-radius: 0;
+  text-align: left;
+  cursor: pointer;
+}
+.settings-menu > .settings-back svg {
+  flex: none;
+  width: 17px;
+  height: 17px;
+}
+.settings-menu > .settings-back strong {
+  font-size: 13px;
+}
+.player-control-group .settings-menu > .settings-back:hover {
+  background: none;
+  color: var(--accent);
+}
+/* The app's own switch shape, at the size the rest of the player uses. */
+.settings-switch input {
+  appearance: none;
+  flex: 0 0 auto;
+  width: 40px;
+  height: 23px;
+  margin: 0;
+  border: 1px solid var(--episodes-field-line);
+  border-radius: 999px;
+  background: #26272b;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.settings-switch input::after {
+  content: "";
+  display: block;
+  width: 17px;
+  height: 17px;
+  margin: 2px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s ease;
+}
+.settings-switch input:checked {
+  background: var(--accent-gradient, var(--accent));
+}
+.settings-switch input:checked::after {
+  transform: translateX(17px);
+}
+.settings-switch input:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+.settings-switch:has(input:disabled) > span {
+  opacity: 0.5;
+}
+
+/* ---- Dropdowns --------------------------------------------------------- */
+/* The list a select opens, drawn by the app instead of by the platform. Only
+   where there is a mouse — a phone opens its own picker, which is better than
+   anything here would be. Positioned in the viewport and rendered at the end
+   of the document, so a field inside a scrolling panel or a player overlay
+   opens a list that is not clipped by either. */
+.select-menu {
+  position: fixed;
+  /* Above every overlay a field can be opened from, the roulette dialog and
+     the plugin dialog included — both of which sit in the thousands. These
+     two are portalled to the document and are transient, so nothing the app
+     draws should ever come out on top of them. */
+  z-index: 3000;
+  max-height: 302px;
+  padding: 5px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  border: 1px solid var(--episodes-field-line);
+  border-radius: 12px;
+  background: var(--episodes-raised);
+  box-shadow: 0 18px 50px #000b;
+  animation: select-menu-in 0.12s ease-out;
+}
+@keyframes select-menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .select-menu {
+    animation: none;
+  }
+}
+.select-menu > button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #e7ebef;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.select-menu > button > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.select-menu > button > svg {
+  flex: none;
+  width: 15px;
+  height: 15px;
+  color: var(--accent);
+}
+/* Follows the keyboard as well as the pointer — the two share one highlight,
+   so arrowing down and moving the mouse cannot disagree about where you are. */
+.select-menu > button.is-active:not(:disabled) {
+  background: var(--episodes-hover);
+}
+.select-menu > button.selected {
+  color: #fff;
+  font-weight: 650;
+}
+.select-menu > button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ---- Tooltips ---------------------------------------------------------- */
+/* The app's own, in place of the operating system's pale box in a system
+   font. Positioned in the viewport by the module that owns it, so it is
+   fixed and outside every stacking context the app builds. */
+.app-tooltip {
+  position: fixed;
+  /* Above the dropdown, which is itself above everything else. It cannot
+     block anything: it takes no pointer events. */
+  z-index: 3001;
+  max-width: min(280px, calc(100vw - 16px));
+  padding: 6px 10px;
+  border: 1px solid var(--episodes-field-line);
+  border-radius: 8px;
+  background: var(--episodes-raised);
+  box-shadow: 0 10px 28px #000a;
+  color: #e7ebef;
+  font-size: 12px;
+  line-height: 1.4;
+  /* It follows the pointer's target, so it must never be one itself. */
+  pointer-events: none;
+  animation: app-tooltip-in 0.1s ease-out;
+}
+@keyframes app-tooltip-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-tooltip {
+    animation: none;
+  }
+}
+
+/* ---- Caption customiser ------------------------------------------------ */
+.caption-style-menu {
+  width: min(340px, calc(100vw - 30px));
+}
+/* A line of the thing being changed, drawn from the same values as the cue
+   stylesheet — so the effect is visible without hunting for a caption. */
+.caption-style-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 62px;
+  margin: 2px 0 8px;
+  padding: 10px;
+  border: 1px solid var(--episodes-field-line);
+  border-radius: 10px;
+  background:
+    repeating-linear-gradient(
+      45deg,
+      #16171a 0 8px,
+      #101114 8px 16px
+    );
+  line-height: 1.3;
+  text-align: center;
+}
+.caption-style-preview > span {
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+/* Minus, value, plus — the shape of every number in this panel. */
+.caption-style-step > em {
+  gap: 4px;
+}
+.player-control-group .caption-style-step > em > button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--episodes-field-line);
+  border-radius: 8px;
+  background: var(--episodes-field);
+  color: inherit;
+}
+.player-control-group .caption-style-step > em > button:hover:not(:disabled) {
+  background: var(--episodes-hover);
+}
+.player-control-group .caption-style-step > em > button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.caption-style-step > em > button svg {
+  width: 14px;
+  height: 14px;
+}
+.caption-style-step > em > i {
+  min-width: 26px;
+  color: #e7ebef;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.caption-style-swatches {
+  display: grid;
+  gap: 7px;
+  padding: 8px 10px 4px;
+}
+.caption-style-swatches > small {
+  margin: 0;
+  color: #97a1ac;
+  font-size: 11px;
+}
+.caption-style-swatches > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.player-control-group .caption-style-swatches button {
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid #ffffff2e;
+  border-radius: 50%;
+  background: var(--swatch);
+}
+/* Transparent has nothing to show, so it is drawn as a crossed-out circle
+   rather than as a hole the ground shows through. */
+.player-control-group .caption-style-swatches button.is-none {
+  background:
+    linear-gradient(
+      45deg,
+      transparent calc(50% - 1px),
+      #d0555f calc(50% - 1px) calc(50% + 1px),
+      transparent calc(50% + 1px)
+    ),
+    var(--episodes-field);
+}
+.player-control-group .caption-style-swatches button.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 .controls-hidden {
   cursor: none;
@@ -3316,8 +3975,16 @@ html.native-player-active.native-player-covered .player-view.native-player {
     height: 44px;
   }
   .player-center {
-    width: 62px;
-    height: 62px;
+    width: 68px;
+    height: 68px;
+  }
+  .player-center svg {
+    width: 44px;
+    height: 44px;
+  }
+  .player-center-busy svg {
+    width: 38px;
+    height: 38px;
   }
   .player-controls {
     padding: 12px 12px max(12px, env(safe-area-inset-bottom));
@@ -3331,16 +3998,20 @@ html.native-player-active.native-player-covered .player-view.native-player {
     margin-top: 5px;
   }
   .player-control-group {
-    gap: 5px;
+    gap: 3px;
   }
   .player-control-group button {
-    min-width: 40px;
-    height: 40px;
-    padding: 0 9px;
+    min-width: 34px;
+    height: 36px;
+    padding: 0 6px;
+  }
+  .player-control-group button svg {
+    width: 19px;
+    height: 19px;
   }
   .player-control-group .player-play {
-    width: 48px;
-    height: 48px;
+    width: 44px;
+    height: 44px;
   }
   .volume-slider {
     display: none;
@@ -3643,7 +4314,7 @@ html.native-player-active.native-player-covered .player-view.native-player {
   flex-wrap: wrap;
   gap: 44px;
   padding: 28px 7vw;
-  border-top: 1px solid #ffffff12;
+  border-top: 0;
 }
 .detail-credits > div {
   display: grid;
@@ -4494,6 +5165,9 @@ body.is-locked {
   backdrop-filter: blur(14px);
   animation: roulette-backdrop-in 0.2s ease-out;
 }
+.episode-roulette-backdrop {
+  overscroll-behavior: contain;
+}
 .library-roulette {
   width: min(980px, 94vw);
   overflow: hidden;
@@ -4668,9 +5342,131 @@ body.is-locked {
 .library-roulette-actions svg {
   width: 18px;
 }
+
+/* Episode rolls use the same reel motion with their landscape stills intact. */
+.episode-roulette .library-roulette-frame {
+  height: 230px;
+}
+.episode-roulette-setup {
+  flex-wrap: nowrap;
+}
+.episode-roulette-scope {
+  display: grid;
+  gap: 5px;
+  color: #858f99;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+/* The library roulette's row is three pickers sharing the width, so the rule
+   for its labels spreads them all. This row is one picker and a settings
+   button — and "All seasons" stretched across 900px of dialog read as a bug.
+   Named through the row so it outranks that shared rule. */
+.library-roulette-setup .episode-roulette-scope {
+  flex: 0 0 auto;
+}
+.library-roulette-setup .episode-roulette-scope select {
+  width: auto;
+  min-width: 170px;
+}
+.episode-roulette-scope select {
+  min-width: 170px;
+  padding: 10px 34px 10px 13px;
+  border: 1px solid var(--panel-border);
+  border-radius: 11px;
+  background: #0d1014;
+  color: #f1f4f7;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: normal;
+  text-transform: none;
+}
+.episode-roulette.finished .library-roulette-frame {
+  height: 330px;
+}
+.episode-roulette .library-roulette-track figure {
+  position: relative;
+  width: 180px;
+}
+.episode-roulette .library-roulette-track img,
+.episode-roulette .library-roulette-track .library-roulette-placeholder {
+  width: 180px;
+  height: 102px;
+  border-radius: 11px;
+  aspect-ratio: 16 / 9;
+}
+.episode-roulette .library-roulette-reveal img,
+.episode-roulette .library-roulette-reveal .library-roulette-placeholder {
+  width: 320px;
+  height: 180px;
+  aspect-ratio: 16 / 9;
+}
 @keyframes roulette-backdrop-in {
   from { opacity: 0; }
   to { opacity: 1; }
+}
+
+@media (min-width: 761px) {
+  .detail-view.has-episode-panel .episode-header-controls {
+    align-items: end;
+  }
+  .detail-view.has-episode-panel .episode-random-button {
+    margin-bottom: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .episode-header-controls {
+    align-items: end;
+  }
+  .episode-random-button {
+    margin-bottom: 18px;
+  }
+  .episode-roulette .library-roulette-frame {
+    height: 190px;
+  }
+  .episode-roulette-setup {
+    align-items: end;
+    flex-direction: row;
+  }
+  /* A phone has the room for one picker and nothing else, so here it does take
+     the row. Named through the row for the same reason as above. */
+  .library-roulette-setup .episode-roulette-scope {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+  .library-roulette-setup .episode-roulette-scope select {
+    width: 100%;
+    min-width: 0;
+  }
+  .episode-roulette.finished .library-roulette-frame {
+    height: 300px;
+  }
+  .episode-roulette .library-roulette-track figure,
+  .episode-roulette .library-roulette-track img,
+  .episode-roulette .library-roulette-track .library-roulette-placeholder {
+    width: 150px;
+  }
+  .episode-roulette .library-roulette-track img,
+  .episode-roulette .library-roulette-track .library-roulette-placeholder {
+    height: 84px;
+  }
+  .episode-roulette .library-roulette-reveal {
+    flex-direction: column;
+    gap: 11px;
+    text-align: center;
+  }
+  .episode-roulette .library-roulette-reveal img,
+  .episode-roulette .library-roulette-reveal .library-roulette-placeholder {
+    width: 168px;
+    height: 95px;
+  }
+  .episode-roulette .library-roulette-reveal p {
+    -webkit-line-clamp: 2;
+    margin-top: 5px;
+  }
 }
 
 /* ---- Discover filters -------------------------------------------------- */
@@ -4723,6 +5519,16 @@ body.is-locked {
 .empty-state span {
   color: #8d97a2;
   font-size: 13px;
+}
+/* Nothing at all came back, so this is the whole answer rather than a caption
+   above a list — sized to be read as one. */
+.search-empty-state {
+  padding: 90px 26px;
+}
+.search-empty-state strong {
+  font-size: clamp(26px, 4vw, 40px);
+  line-height: 1.25;
+  letter-spacing: -0.015em;
 }
 
 @media (max-width: 760px) {
@@ -4840,7 +5646,7 @@ body.is-locked {
 
 /* ---- Collection folders ------------------------------------------------ */
 .folder-tile {
-  flex: 0 0 170px;
+  flex: 0 0 var(--poster-width);
   padding: 0;
   border: 0;
   background: transparent;
@@ -4854,17 +5660,17 @@ body.is-locked {
   place-items: center;
   /* Poster is Nuvio's default shape, so it is the base here and the wider
      shapes override it rather than the other way round. */
-  aspect-ratio: 2/3;
+  aspect-ratio: var(--poster-aspect);
   overflow: hidden;
   border: 1px solid #293039;
-  border-radius: 14px;
+  border-radius: var(--poster-radius);
   background: linear-gradient(145deg, #1b2027, #12161b);
 }
 .folder-tile.shape-square .folder-art {
   aspect-ratio: 1;
 }
 .folder-tile.shape-landscape {
-  flex-basis: 268px;
+  flex-basis: max(var(--poster-width), 210px);
 }
 .folder-tile.shape-landscape .folder-art {
   aspect-ratio: 16/9;
@@ -4926,10 +5732,10 @@ body.is-locked {
     margin-top: 2px;
   }
   .folder-tile {
-    flex: 0 0 132px;
+    flex-basis: min(var(--poster-width), 42vw);
   }
   .folder-tile.shape-landscape {
-    flex-basis: 212px;
+    flex-basis: min(max(var(--poster-width), 210px), 76vw);
   }
 }
 
@@ -5569,7 +6375,6 @@ body.is-locked {
 
 /* ---- Source panel tools ------------------------------------------------ */
 .source-sheet-tools {
-  display: flex;
   align-items: center;
   gap: 10px;
 }
@@ -5675,7 +6480,8 @@ body.is-locked {
      the title, which would otherwise be clipped on a 375px screen. Narrower
      than that it ellipsises, which is what it is there for. */
   .source-player select {
-    max-width: 36vw;
+    width: 100%;
+    max-width: 100%;
   }
 }
 
@@ -5748,9 +6554,12 @@ body.is-locked {
   /* White, and the default. Nuvio's own value, from ThemeColors.kt. */
   --accent: #f5f5f5;
   --accent-ink: #111111;
-  --poster-width: 126px;
-  --poster-height: 189px;
-  --poster-aspect: 126 / 189;
+  /* The fallback until the settings blob lands and App writes the stored
+     size over these. Kept in step with POSTER_DEFAULTS, or the cards resize
+     once on every load. */
+  --poster-width: 140px;
+  --poster-height: 210px;
+  --poster-aspect: 140 / 210;
   --poster-radius: 12px;
 }
 :root[data-nuvio-accent="gold"] { --accent: #ffd45c; --accent-ink: #111111; --accent-gradient: linear-gradient(145deg, #8a5700, #e8a91c, #fff1a8, #ffd45c, #9a6200); }
@@ -5818,6 +6627,23 @@ body.is-locked {
   background: var(--panel-soft);
   border: 1px solid var(--panel-border);
   border-radius: 10px;
+}
+/* In the row with the numbers it undoes. The cells are label-over-box, so it
+   sits at the bottom of its own and takes the box's height. */
+.poster-size-reset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  align-self: end;
+  min-height: 42px;
+}
+.setting-grid-note {
+  display: block;
+  padding-top: 12px;
+  color: #87919b;
+  font-size: 12px;
+  line-height: 1.45;
 }
 .setting-text-row {
   grid-template-columns: minmax(0, 1fr) minmax(220px, 38%);
@@ -6439,13 +7265,20 @@ body.is-locked {
      * percentage stops below mean something — they are positions on the
      * artwork.
      */
-    --detail-art: clamp(620px, 84svh, 880px);
-    min-height: 0;
+    --detail-hero-height: clamp(620px, 84svh, 880px);
+    --detail-art-height: var(--detail-hero-height);
+    min-height: var(--detail-hero-height);
     align-items: flex-start;
     justify-content: flex-start;
     /* Puts the title around 56% down the artwork, which is where the official
        app sits it — over the picture, not after it. */
     padding: clamp(340px, 47svh, 500px) 20px 30px;
+    text-align: center;
+  }
+  .detail-hero::before {
+    height: var(--detail-art-height);
+    min-height: 0;
+    aspect-ratio: auto;
     background-image:
       linear-gradient(
         to bottom,
@@ -6458,8 +7291,7 @@ body.is-locked {
       var(--detail-backdrop) !important;
     background-position: center top;
     background-repeat: no-repeat;
-    background-size: 100% var(--detail-art), auto var(--detail-art);
-    text-align: center;
+    background-size: 100% 100%, auto 100%;
   }
   .detail-copy {
     display: flex;
@@ -7003,13 +7835,9 @@ body.is-locked {
     padding-left: 0;
   }
 
-  /* Collection folders use a deliberate 170px poster tile. Home catalogs
-     should share that same shelf rhythm instead of shrinking to the global
-     126px grid preference. This is intentionally limited to shelf rows so
-     Library, Discover, and full catalog grids still respect poster settings. */
-  .media-section .media-row:not(.folder-row) .poster-card {
-    flex-basis: 170px;
-  }
+  /* Home catalog and Collection shelves both inherit --poster-width. Keeping
+     typography shared here preserves their shelf rhythm while still letting
+     the synced Appearance size control the actual cards. */
   .media-section .media-row:not(.folder-row) .poster-card > strong,
   .folder-row .folder-tile > strong {
     margin-top: 10px;
@@ -7117,7 +7945,8 @@ body.is-locked {
     margin-right: clamp(430px, 31vw, 520px);
   }
   .detail-view.has-episode-panel .detail-hero {
-    min-height: 590px;
+    --detail-hero-height: 590px;
+    min-height: var(--detail-hero-height);
     align-items: flex-end;
     padding: 100px 5vw 48px;
   }
@@ -7242,8 +8071,8 @@ body.is-locked {
     flex-direction: column;
     margin: 0;
     padding: 31px 27px 20px;
-    border-left: 1px solid #1a1b1e;
-    background: #030304;
+    border-left: 1px solid var(--episodes-line);
+    background: var(--episodes-bg);
     box-shadow: -22px 0 55px #0007;
   }
   .detail-view.has-episode-panel .episodes header {
@@ -7269,8 +8098,8 @@ body.is-locked {
     width: auto;
     margin: 0;
     padding: 11px 34px 11px 13px;
-    border-color: #232428;
-    background: #0a0a0b;
+    border-color: var(--episodes-field-line);
+    background: var(--episodes-field);
   }
   .detail-view.has-episode-panel .episodes h2 {
     margin-bottom: 8px;
@@ -7323,31 +8152,42 @@ body.is-locked {
     scrollbar-color: #34353a #080809;
     scrollbar-width: thin;
   }
+  /* The player's own panel is the same list at the same width, so it takes the
+     same row: a 145px still, and an overview given two wrapped lines instead
+     of one truncated to an ellipsis. */
   .detail-view.has-episode-panel .episode-list > button,
-  .detail-view.has-episode-panel .episode-list.is-list > button {
+  .detail-view.has-episode-panel .episode-list.is-list > button,
+  .player-episodes .episode-list > button,
+  .player-episodes .episode-list.is-list > button {
     grid-template-columns: 145px minmax(0, 1fr);
     min-height: 98px;
     gap: 0;
     padding: 8px;
     border: 0;
     border-radius: 14px;
-    background: #0b0b0c;
+    background: var(--episodes-raised);
     transition: background 130ms ease;
   }
   .detail-view.has-episode-panel .episode-list > button:hover,
-  .detail-view.has-episode-panel .episode-list > button:focus-visible {
-    background: #171719;
+  .detail-view.has-episode-panel .episode-list > button:focus-visible,
+  .player-episodes .episode-list > button:hover,
+  .player-episodes .episode-list > button:focus-visible {
+    background: var(--episodes-hover);
   }
   .detail-view.has-episode-panel .episode-thumb,
-  .detail-view.has-episode-panel .episode-list.is-list .episode-thumb {
+  .detail-view.has-episode-panel .episode-list.is-list .episode-thumb,
+  .player-episodes .episode-thumb,
+  .player-episodes .episode-list.is-list .episode-thumb {
     width: 145px;
     height: 82px;
   }
-  .detail-view.has-episode-panel .episode-row > span:not(.episode-thumb) {
+  .detail-view.has-episode-panel .episode-row > span:not(.episode-thumb),
+  .player-episodes .episode-row > span:not(.episode-thumb) {
     align-content: center;
     padding: 5px 11px;
   }
-  .detail-view.has-episode-panel .episode-list p {
+  .detail-view.has-episode-panel .episode-list p,
+  .player-episodes .episode-list p {
     display: -webkit-box;
     overflow: hidden;
     -webkit-box-orient: vertical;
@@ -7358,11 +8198,13 @@ body.is-locked {
     line-height: 1.42;
     white-space: normal;
   }
-  .detail-view.has-episode-panel .episode-list strong {
+  .detail-view.has-episode-panel .episode-list strong,
+  .player-episodes .episode-list strong {
     font-size: 13px;
     line-height: 1.2;
   }
-  .detail-view.has-episode-panel .episode-list small {
+  .detail-view.has-episode-panel .episode-list small,
+  .player-episodes .episode-list small {
     color: #92959b;
     font-size: 9px;
     font-weight: 700;
@@ -8161,8 +9003,9 @@ body.is-locked {
   width: min(460px, 100%);
   display: flex;
   flex-direction: column;
-  background: var(--app-bg);
-  border-left: 1px solid var(--panel-border);
+  background: var(--episodes-bg);
+  border-left: 1px solid var(--episodes-line);
+  box-shadow: -22px 0 55px #0007;
   animation: player-episodes-in 0.18s ease-out;
 }
 @keyframes player-episodes-in {
@@ -8190,12 +9033,37 @@ body.is-locked {
   font-size: 17px;
 }
 /* display:contents on the wrapper means the select is the child that lays
-   out, so the spacing belongs to it. */
+   out, so the spacing belongs to it. Painted as the detail panel's select is,
+   rather than the lighter one the page uses inline. */
+.player-episodes .season-select-wrap > span {
+  display: block;
+  margin: 0 16px 5px;
+  color: #85878d;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.09em;
+}
 .player-episodes select {
   margin: 0 16px 12px;
+  padding: 11px 34px 11px 13px;
+  border-color: var(--episodes-field-line);
+  background: var(--episodes-field);
 }
+/* Hidden by default because the page's inline list has a heading above it
+   already; this panel does not, so here it is the only thing naming the
+   season being looked at. */
 .player-episodes > .episode-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin: 0 16px 10px;
+}
+.player-episodes > .episode-list-heading strong {
+  font-size: 15px;
+}
+.player-episodes > .episode-list-heading span {
+  color: #777b82;
+  font-size: 10px;
 }
 /* The detail page's own list, so its rows keep their own styling; only the
    scrolling belongs to the panel. */
@@ -8204,6 +9072,15 @@ body.is-locked {
   overflow-y: auto;
   overscroll-behavior: none;
   padding: 0 16px max(16px, env(safe-area-inset-bottom));
+  scrollbar-color: #34353a #080809;
+  scrollbar-width: thin;
+}
+/* The tighter rhythm the detail page's panel uses. Phones keep the roomier
+   spacing their much taller episode cards were drawn for. */
+@media (min-width: 761px) {
+  .player-episode-list {
+    gap: 5px;
+  }
 }
 
 @media (max-width: 760px) {

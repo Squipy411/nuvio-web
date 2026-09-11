@@ -244,6 +244,13 @@ export type Stream = {
     };
   };
 };
+export type Subtitle = {
+  id: string;
+  url: string;
+  lang: string;
+  /** Distinguishes otherwise-identical languages from different providers. */
+  addonName: string;
+};
 export type LibraryItem = Meta & { addedAt?: number };
 export type ProgressRow = {
   contentId: string;
@@ -268,6 +275,16 @@ export type WatchedItem = {
 };
 export type ExternalPlayerMode =
   | "internal"
+  /**
+   * The browser's own video element, with Matroska remuxed into fMP4 for it.
+   *
+   * In-app like "internal", not launched anywhere — it is listed beside the
+   * external players only because that menu is where someone goes to change
+   * how a stream is played. It exists because Safari decodes audio the canvas
+   * player cannot: WebCodecs is what our decoder asks, and iOS answers no for
+   * audio the platform plays perfectly well through a video element.
+   */
+  | "native"
   | "copy"
   | "vlc"
   | "nextplayer"

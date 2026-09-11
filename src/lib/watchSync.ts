@@ -1,4 +1,5 @@
 import {
+  currentSession,
   loadProgress,
   loadWatchedItems,
   progressDeltaCursor,
@@ -7,7 +8,7 @@ import {
   watchedDeltaCursor,
 } from "./account";
 import { platform } from "../platform/index.ts";
-import type { ProgressRow, WatchedItem } from "../types";
+import type { ProgressRow, Session, WatchedItem } from "../types";
 
 /**
  * Snapshot-once, then deltas.
@@ -22,8 +23,10 @@ import type { ProgressRow, WatchedItem } from "../types";
  */
 type Cached<T> = { cursor: number; rows: T[]; profileIndex: number };
 
-const key = (name: string, profileIndex: number) =>
-  `watch-sync:${name}:${profileIndex}`;
+const key = (name: string, profileIndex: number, session: Session) =>
+  `watch-sync:v2:${JSON.stringify([session.backend.url, session.user.id, name, profileIndex])}`;
+const flights = new Map<string, { session: Session; promise: Promise<unknown[]> }>();
+const revisions = new Map<string, number>();
 
 async function sync<T>(
   name: string,
@@ -36,17 +39,47 @@ async function sync<T>(
     rows: T[],
   ) => Promise<{ cursor: number; rows: T[] }>,
 ): Promise<T[]> {
-  const storeKey = key(name, profileIndex);
+  const session = currentSession();
+  if (!session) throw new Error("Sign in first.");
+  const storeKey = key(name, profileIndex, session);
+  const existing = flights.get(storeKey);
+  if (existing?.session === session) return existing.promise as Promise<T[]>;
+  const revision = revisions.get(storeKey) ?? 0;
+  const assertCurrent = () => {
+    if (currentSession() !== session || (revisions.get(storeKey) ?? 0) !== revision)
+      throw new Error("The Nuvio session changed while syncing.");
+  };
+  const run = syncOwned(storeKey, profileIndex, snapshot, cursorOf, drain, assertCurrent);
+  flights.set(storeKey, { session, promise: run });
+  try {
+    return await run;
+  } finally {
+    if (flights.get(storeKey)?.promise === run) flights.delete(storeKey);
+  }
+}
+
+async function syncOwned<T>(
+  storeKey: string,
+  profileIndex: number,
+  snapshot: () => Promise<T[]>,
+  cursorOf: (profileIndex: number) => Promise<number | null>,
+  drain: (profileIndex: number, since: number, rows: T[]) => Promise<{ cursor: number; rows: T[] }>,
+  assertCurrent: () => void,
+): Promise<T[]> {
   const cached = await platform.storage
     .get<Cached<T>>(storeKey)
     .catch(() => null);
+  assertCurrent();
 
-  if (cached && cached.profileIndex === profileIndex) {
+  if (cached && cached.profileIndex === profileIndex &&
+      Number.isSafeInteger(cached.cursor) && cached.cursor >= 0 && Array.isArray(cached.rows)) {
     try {
       const next = await drain(profileIndex, cached.cursor, cached.rows);
+      assertCurrent();
       await platform.storage
         .set(storeKey, { ...next, profileIndex })
         .catch(() => undefined);
+      assertCurrent();
       return next.rows;
     } catch {
       // Fall through to a snapshot rather than serving a stale cache.
@@ -55,12 +88,16 @@ async function sync<T>(
 
   // Cursor first: a write landing during the snapshot is then replayed as a
   // delta instead of falling into the gap between the two calls.
+  assertCurrent();
   const cursor = await cursorOf(profileIndex).catch(() => null);
+  assertCurrent();
   const rows = await snapshot();
+  assertCurrent();
   if (cursor != null)
     await platform.storage
       .set(storeKey, { cursor, rows, profileIndex })
       .catch(() => undefined);
+  assertCurrent();
   return rows;
 }
 
@@ -88,11 +125,18 @@ export const syncWatched = (profileIndex: number): Promise<WatchedItem[]> =>
     },
   );
 
-/** Drops the caches, forcing a fresh snapshot. Used on sign-out. */
+/** Drops this account's caches; an in-flight pull may not recreate them. */
 export async function clearWatchSyncCache(profileIndex: number) {
+  const session = currentSession();
   await Promise.all(
-    ["progress", "watched"].map((name) =>
-      platform.storage.set(key(name, profileIndex), null).catch(() => undefined),
-    ),
+    ["progress", "watched"].flatMap((name) => {
+      const keys = [`watch-sync:${name}:${profileIndex}`];
+      if (session) keys.push(key(name, profileIndex, session));
+      return keys.map((storeKey) => {
+        revisions.set(storeKey, (revisions.get(storeKey) ?? 0) + 1);
+        flights.delete(storeKey);
+        return platform.storage.remove(storeKey).catch(() => undefined);
+      });
+    }),
   );
 }

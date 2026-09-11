@@ -14,14 +14,21 @@ test("real FFmpeg media matrix, authenticated HTTP, byte ranges, seek, audio out
   // @ts-expect-error Test-only fixture generator is plain ESM and never bundled.
   const { generateMediaFixtures } = await import("../../scripts/media-fixtures.mjs");
   await generateMediaFixtures(directory);
+  for (const [name, flags] of [
+    ["h26410.mkv", ["-pix_fmt", "yuv420p10le", "-g", "48"]],
+    ["long-gop.mkv", ["-pix_fmt", "yuv420p", "-g", "480", "-keyint_min", "480", "-sc_threshold", "0"]],
+  ] as const) {
+    const generated = spawnSync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-y", "-i", join(directory, "direct.mp4"), "-map", "0:v", "-map", "0:a:0", "-c:v", "libx264", "-preset", "ultrafast", ...flags, "-c:a", "copy", join(directory, name)], { encoding: "utf8", timeout: 30_000 });
+    assert.equal(generated.status, 0, generated.stderr);
+  }
   const ranges: string[] = []; const customHeaders: string[] = [];
   const fixture = http.createServer(async (req, res) => {
     const path = new URL(req.url ?? "/", "http://fixture").pathname;
     if (path === "/auth/v1/user") { res.writeHead(req.headers.authorization === "Bearer test-nuvio-access" ? 200 : 401, { "content-type": "application/json" }); res.end(JSON.stringify({ id: "fixture-user" })); return; }
     if (path === "/broken") { res.writeHead(404); res.end(); return; }
-    const name = path.startsWith("/headers/") ? path.slice(9) : path.slice(1);
+    const name = path === "/redirected-hls" ? "hls/index.m3u8" : path.startsWith("/headers/") ? path.slice(9) : path.slice(1);
     if (path.startsWith("/headers/")) { customHeaders.push(String(req.headers.referer)); if (req.headers.referer !== "https://allowed.example/") { res.writeHead(403); res.end(); return; } }
-    if (!/^(?:direct\.mp4|remux\.mkv|audio\.mkv|hevc\.mkv|hevc10\.mkv|av1\.webm|sample\.srt|hls(?:-fmp4|-extensionless)?\/[a-z0-9.-]+)$/.test(name)) { res.writeHead(404); res.end(); return; }
+    if (!/^(?:direct\.mp4|remux\.mkv|audio\.mkv|hevc\.mkv|hevc10\.mkv|h26410\.mkv|long-gop\.mkv|av1\.webm|sample\.srt|hls(?:-fmp4|-extensionless)?\/[a-z0-9.-]+)$/.test(name)) { res.writeHead(404); res.end(); return; }
     const file = join(directory, name); const info = await stat(file).catch(() => null);
     if (!info) { res.writeHead(404); res.end(); return; }
     const range = req.headers.range; if (range) ranges.push(range);
@@ -33,7 +40,7 @@ test("real FFmpeg media matrix, authenticated HTTP, byte ranges, seek, audio out
       end = match[1] && match[2] ? Math.min(Number(match[2]), end) : end;
       if (start > end) { res.writeHead(416, { "content-range": `bytes */${info.size}` }); res.end(); return; }
     }
-    res.writeHead(range ? 206 : 200, { "content-length": end - start + 1, "accept-ranges": "bytes", "content-type": name.endsWith("m3u8") ? "application/vnd.apple.mpegurl" : name.endsWith("srt") ? "text/plain" : "application/octet-stream", ...(range ? { "content-range": `bytes ${start}-${end}/${info.size}` } : {}) });
+    res.writeHead(range ? 206 : 200, { "content-length": end - start + 1, "accept-ranges": "bytes", "content-type": path === "/redirected-hls" ? "application/octet-stream" : name.endsWith("m3u8") ? "application/vnd.apple.mpegurl" : name.endsWith("srt") ? "text/plain" : "application/octet-stream", ...(range ? { "content-range": `bytes ${start}-${end}/${info.size}` } : {}) });
     if (req.method === "HEAD") res.end(); else { const stream = createReadStream(file, { start, end }); stream.pipe(res); res.once("close", () => stream.destroy()); }
   });
   await new Promise<void>((resolve) => fixture.listen(0, "127.0.0.1", resolve));
@@ -46,7 +53,7 @@ test("real FFmpeg media matrix, authenticated HTTP, byte ranges, seek, audio out
       const request = http.request({ hostname: "127.0.0.1", port: address.port, path: url.pathname, headers: options.headers, method: options.method, signal: options.signal }, resolve);
       request.on("error", reject); request.end();
     });
-    return { response, url };
+    return { response, url: url.pathname === "/redirected-hls" ? new URL("/hls/index.m3u8", url) : url };
   };
   process.env.TRANSCODE_TEMP_DIR = join(directory, "temporary");
   const { startCompanion } = await import("../src/index.ts");
@@ -83,6 +90,8 @@ test("real FFmpeg media matrix, authenticated HTTP, byte ranges, seek, audio out
     });
     await t.test("MP4 relay preserves exact ranges and required upstream headers", async () => {
       const session = await create("headers/direct.mp4", caps, { headers: { Referer: "https://allowed.example/" } }); assert.equal(session.mode, "relay");
+      assert.ok(session.probe.seekable); assert.equal(session.probe.contentLength, (await stat(join(directory, "direct.mp4"))).size);
+      assert.ok(!ranges.includes("bytes=0-1023"), "metadata should come from ffprobe's existing read, not a second request");
       const response = await fetch(origin + session.url, { headers: { cookie, range: "bytes=100-199" } });
       assert.equal(response.status, 206); assert.equal(response.headers.get("content-range"), `bytes 100-199/${(await stat(join(directory, "direct.mp4"))).size}`);
       assert.deepEqual(Buffer.from(await response.arrayBuffer()), (await readFile(join(directory, "direct.mp4"))).subarray(100, 200));
@@ -90,7 +99,7 @@ test("real FFmpeg media matrix, authenticated HTTP, byte ranges, seek, audio out
       assert.equal((await fetch(origin + session.url)).status, 401); await stop(session);
     });
     await t.test("HLS playlists are probed and every media URI stays behind authentication", async () => {
-      for (const file of ["hls/index.m3u8", "hls-fmp4/index.m3u8", "hls-extensionless/index.m3u8"]) {
+      for (const file of ["hls/index.m3u8", "hls-fmp4/index.m3u8", "hls-extensionless/index.m3u8", "redirected-hls"]) {
         const session = await create(file); assert.equal(session.mode, "relay");
         const response = await fetch(origin + session.url, { headers: { cookie } });
         assert.equal(response.status, 200); const playlist = await response.text();
@@ -98,17 +107,27 @@ test("real FFmpeg media matrix, authenticated HTTP, byte ranges, seek, audio out
         const segment = playlist.split("\n").find((line) => line.startsWith("/api/companion/")); assert.ok(segment, playlist);
         assert.equal((await fetch(origin + segment, { headers: { cookie } })).status, 200);
         assert.equal((await fetch(origin + segment)).status, 401);
+        const head = await fetch(origin + session.url, { method: "HEAD", headers: { cookie } });
+        assert.equal(head.status, 200); assert.match(head.headers.get("content-type") ?? "", /mpegurl/);
         await stop(session);
       }
     });
     for (const [file, mode, codecCaps] of [
       ["remux.mkv", "remux", caps], ["audio.mkv", "audio-transcode", caps], ["hevc.mkv", "transcode", caps],
-      ["hevc10.mkv", "audio-transcode", { ...caps, video: { ...caps.video, hevc10: true } }], ["av1.webm", "transcode", caps],
+      ["hevc10.mkv", "audio-transcode", { ...caps, video: { ...caps.video, hevc10: true } }], ["av1.webm", "transcode", caps], ["h26410.mkv", "transcode", caps],
     ] as const) await t.test(`${file}: real ${mode} output decodes`, async () => {
       const start = performance.now(); const session = await create(file, codecCaps); assert.equal(session.mode, mode);
       const value = await output(session); assert.equal(value.streams.find((s) => s.codec_type === "video")?.codec_name, file === "hevc10.mkv" ? "hevc" : "h264");
       assert.equal(value.streams.find((s) => s.codec_type === "audio")?.codec_name, "aac");
       console.info(JSON.stringify({ fixture: file, mode, startupMs: Math.round(performance.now() - start) })); await stop(session);
+    });
+    await t.test("long-GOP stream copy produces a playable segment within its startup burst", async () => {
+      const started = performance.now(); const session = await create("long-gop.mkv");
+      assert.equal(session.mode, "remux"); await output(session);
+      const startupMs = Math.round(performance.now() - started);
+      assert.ok(startupMs < 7000, `20-second keyframes should not wait for realtime ingestion (${startupMs}ms)`);
+      console.info(JSON.stringify({ fixture: "long-gop.mkv", mode: "remux", startupMs }));
+      await stop(session);
     });
     await t.test("seeking both directions restarts output and actual audio frequency changes", async () => {
       const session = await create("remux.mkv"); const first = await output(session);
