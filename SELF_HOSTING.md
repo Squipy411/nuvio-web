@@ -3,14 +3,17 @@
 ## Verified private release
 
 The personal fork is **[Squipy411/nuvio-web](https://github.com/Squipy411/nuvio-web)**.
-Its [successful release workflow](https://github.com/Squipy411/nuvio-web/actions/runs/33984101019) published
+Its [successful release workflow](https://github.com/Squipy411/nuvio-web/actions/runs/34553360693) published
 `ghcr.io/squipy411/nuvio-web-web` and `ghcr.io/squipy411/nuvio-web-companion`.
 **Both images were authenticated-pulled, anonymous access was denied, and the
 freshly pulled Docker stack passed startup and restart checks.** The installer
-is pinned to `ff5a372dcd773fcd1ec7f0735c15268b34704c49`.
+is pinned to `c823071939707f1618d97d3a28eea88b6046e5ff`.
 Actual ZimaOS dashboard import still requires the host's registry login and a
 live host-side check; it has not been claimed as completed.
 Do not import `deployment/compose.zima.template.yml` into ZimaOS.
+
+Already installed? Use the [short existing-Zima update guide](UPDATE_ZIMA.md)
+with exact pull commands and both replacement image values. Do not reinstall.
 
 ## One-file installation after registry sign-in
 

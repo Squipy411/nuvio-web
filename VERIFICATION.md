@@ -1,6 +1,14 @@
 # Verification record
 
-## 2026-09-10 update — local verification
+## 2026-09-10 update — verified private release
+
+**Published and verified:** release commit
+`c823071939707f1618d97d3a28eea88b6046e5ff`, merged via [PR #2](https://github.com/Squipy411/nuvio-web/pull/2).
+[Release run 34553360693](https://github.com/Squipy411/nuvio-web/actions/runs/34553360693)
+passed frontend, real media, browser, production PWA and Docker checks. The publish
+job authenticated-pulled both images, denied anonymous access, and verified a fresh
+stack and restart including HTTPS-origin restrictions and no-store proxy headers.
+The actual existing Zima app was not modified remotely.
 
 Merged original `lucaboox/nuvio-web` through
 `a16757a2c1785d93ce824b220e8aa54ae71fe71b`, preserving the personal companion.
@@ -11,7 +19,7 @@ The old experimental website remains separate and was not used as the base.
 | Frontend and companion TypeScript | Passed |
 | Frontend regression tests | 361 passed, 0 failed |
 | Real FFmpeg 6.1.1 companion tests | 45 passed, 0 skipped |
-| Real Chrome playback | 17 scenarios passed, actual decoded frames and advancing time |
+| Real Chrome playback | 17 scenarios passed on native-HLS and again on forced-MSE paths; Linux CI also passed |
 | Production browser | 3 passed: offline/private cache boundary, plain-LAN auth worker, real two-tab update/cache retirement |
 | Proxy authentication | Exact HTTPS origin/Host, spoof rejection, cookie/CSRF renewal and account switch regressions passed |
 | Visual check | 390px player and 1440px settings inspected; no viewport overflow |
@@ -25,7 +33,7 @@ direct-play speed. Sync tests cover account/profile isolation, ordered settings,
 addons and progress, delayed logout/sign-in races, stale 401 responses and late
 profile reads. Tests use generated media and synthetic authentication only.
 
-The production build is 580.67 kB main JS (182.61 kB gzip), with a 1,277.72 KiB PWA
+The production build is 580.67 kB main JS (182.61 kB gzip), with a 1,277.74 KiB PWA
 precache. It is larger than the September 5 build because this update integrates
 new upstream controls and decoder code; no overall bundle-size reduction is
 claimed. HLS and AC3 engines remain lazy. First-segment timing for a generated
@@ -37,6 +45,17 @@ PWA activation waits for all open tabs' player views and queued account writes,
 and for focused editing to finish. Replacing Docker containers still terminates
 ephemeral playback sessions; stop playback before applying the container update.
 An uncached optional old-build chunk cannot be guaranteed after a server upgrade.
+
+Release digests:
+
+- Web: `sha256:b2e9948c08c408ff93c46e8da884439a4d4582234ac585e3e2d47b970094177a`.
+- Companion: `sha256:3fe73dc7d10e13a89fbcb856cd8e3d0c1e4d0ba69e93229ec4a4adf477a9060d`.
+- Installer artifact `10181755917`: ZIP SHA256 `65cecb0f23586a9b863bd05a646062d3674170fa6245891108639902711bb0e7`, verified against GitHub's digest.
+- Extracted installer matches the checked-in file byte for byte: YAML SHA256 `252d75fe705cab2837dbd957f7035d81b1791526898272f0efbb021b5cc55356`.
+
+The first CI attempt exposed a test-only close/teardown race; it was corrected,
+not waived. Forced-MSE playback then exposed and fixed autoplay overriding a
+paused seek. The final release contains both regressions and passed all gates.
 
 ## Previous verified release — 2026-09-05
 
