@@ -114,6 +114,10 @@ export class CompanionPlayer {
     this.attachedUrl = url; this.attachedHls = hls;
     this.attaching = true;
     this.changing = true; this.hls?.destroy(); this.hls = null;
+    // The JSX autoplay attribute otherwise restarts MSE as soon as a paused
+    // seek appends its first fragment. Only the explicit playback intent owns
+    // play() here; loading a new source must never turn a pause into a play.
+    this.element.autoplay = false;
     this.element.pause(); this.element.removeAttribute("src"); this.element.load();
     this.callbacks.state({ waiting: true, error: "", mode: this.mode }); this.armTimeout(this.session ? 25_000 : 12_000);
     if (hls && (!this.caps.nativeHls || this.forceMse)) {

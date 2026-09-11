@@ -93,10 +93,12 @@ test("a network stall restarts the same mode at a backward seek instead of full 
 
 test("a paused attachment never starts autoplay", async (t) => {
   const player = setup(t); player.wantsPlayback = false;
+  player.element.autoplay = true;
   let plays = 0;
   player.element.play = () => { plays++; return Promise.resolve(); };
   await player.attach("https://media.example/video.mp4", false);
   assert.equal(plays, 0);
+  assert.equal(player.element.autoplay, false);
   assert.equal(player.attaching, false);
 });
 
